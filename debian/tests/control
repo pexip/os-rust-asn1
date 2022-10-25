@@ -1,0 +1,39 @@
+Test-Command: /usr/share/cargo/bin/cargo-auto-test asn1 0.12.2 --all-targets --all-features
+Features: test-name=rust-asn1:@
+Depends: dh-cargo (>= 18), librust-libc-0.2+default-dev (>= 0.2.11-~~), @
+Restrictions: allow-stderr, skip-not-installable
+
+Test-Command: /usr/share/cargo/bin/cargo-auto-test asn1 0.12.2 --all-targets --no-default-features --features const-generics
+Features: test-name=librust-asn1-dev:const-generics
+Depends: dh-cargo (>= 18), librust-libc-0.2+default-dev (>= 0.2.11-~~), @
+Restrictions: allow-stderr, skip-not-installable
+
+Test-Command: /usr/share/cargo/bin/cargo-auto-test asn1 0.12.2 --all-targets --no-default-features --features fallible-allocations
+Features: test-name=librust-asn1-dev:fallible-allocations
+Depends: dh-cargo (>= 18), librust-libc-0.2+default-dev (>= 0.2.11-~~), @
+Restrictions: allow-stderr, skip-not-installable
+
+Test-Command: /usr/share/cargo/bin/cargo-auto-test asn1 0.12.2 --all-targets --no-default-features --features std
+Features: test-name=librust-asn1-dev:std
+Depends: dh-cargo (>= 18), librust-libc-0.2+default-dev (>= 0.2.11-~~), @
+Restrictions: allow-stderr, skip-not-installable
+
+Test-Command: /usr/share/cargo/bin/cargo-auto-test asn1 0.12.2 --all-targets --no-default-features
+Features: test-name=librust-asn1-dev:
+Depends: dh-cargo (>= 18), librust-libc-0.2+default-dev (>= 0.2.11-~~), @
+Restrictions: allow-stderr, skip-not-installable
+
+Test-Command: /usr/share/cargo/bin/cargo-auto-test asn1 0.12.2 --all-targets --no-default-features --features derive
+Features: test-name=librust-asn1+asn1-derive-dev:derive
+Depends: dh-cargo (>= 18), librust-libc-0.2+default-dev (>= 0.2.11-~~), @
+Restrictions: allow-stderr, skip-not-installable
+
+Test-Command: /usr/share/cargo/bin/cargo-auto-test asn1 0.12.2 --all-targets --no-default-features --features asn1_derive
+Features: test-name=librust-asn1+asn1-derive-dev:asn1_derive
+Depends: dh-cargo (>= 18), librust-libc-0.2+default-dev (>= 0.2.11-~~), @
+Restrictions: allow-stderr, skip-not-installable
+
+Test-Command: /usr/share/cargo/bin/cargo-auto-test asn1 0.12.2 --all-targets 
+Features: test-name=librust-asn1+default-dev:default
+Depends: dh-cargo (>= 18), librust-libc-0.2+default-dev (>= 0.2.11-~~), @
+Restrictions: allow-stderr, skip-not-installable
