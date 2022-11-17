@@ -179,6 +179,39 @@ impl<'a> SimpleAsn1Writable for &'a [u8] {
     }
 }
 
+/// Represents values that are encoded as an `OCTET STRING` containing an
+/// encoded TLV, of type `T`.
+#[derive(PartialEq, Debug)]
+pub struct OctetStringEncoded<T>(T);
+
+impl<T> OctetStringEncoded<T> {
+    pub fn new(v: T) -> OctetStringEncoded<T> {
+        OctetStringEncoded(v)
+    }
+
+    pub fn get(&self) -> &T {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<'a, T: Asn1Readable<'a>> SimpleAsn1Readable<'a> for OctetStringEncoded<T> {
+    const TAG: Tag = Tag::primitive(0x04);
+    fn parse_data(data: &'a [u8]) -> ParseResult<Self> {
+        Ok(OctetStringEncoded::new(parse_single(data)?))
+    }
+}
+
+impl<T: Asn1Writable> SimpleAsn1Writable for OctetStringEncoded<T> {
+    const TAG: Tag = Tag::primitive(0x04);
+    fn write_data(&self, dest: &mut WriteBuf) -> WriteResult {
+        self.0.write(&mut Writer::new(dest))
+    }
+}
+
 /// Type for use with `Parser.read_element` and `Writer.write_element` for
 /// handling ASN.1 `PrintableString`.  A `PrintableString` contains an `&str`
 /// with only valid characers.
@@ -1463,15 +1496,25 @@ impl<'a, T: Asn1Writable, const TAG: u32> SimpleAsn1Writable for Explicit<'a, T,
 #[cfg(test)]
 mod tests {
     use crate::{
-        parse_single, BigInt, BigUint, Enumerated, GeneralizedTime, IA5String, ParseError,
-        ParseErrorKind, PrintableString, SequenceOf, SequenceOfWriter, SetOf, SetOfWriter, Tag,
-        Tlv, UtcTime, Utf8String, VisibleString,
+        parse_single, BigInt, BigUint, Enumerated, GeneralizedTime, IA5String, OctetStringEncoded,
+        ParseError, ParseErrorKind, PrintableString, SequenceOf, SequenceOfWriter, SetOf,
+        SetOfWriter, Tag, Tlv, UtcTime, Utf8String, VisibleString,
     };
     #[cfg(feature = "const-generics")]
     use crate::{Explicit, Implicit};
+    use alloc::vec;
+    use alloc::vec::Vec;
     use chrono::{TimeZone, Utc};
+    #[cfg(feature = "std")]
+    use core::hash::{Hash, Hasher};
+    #[cfg(feature = "std")]
     use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+
+    #[test]
+    fn test_octet_string_encoded() {
+        assert_eq!(OctetStringEncoded::new(12).get(), &12);
+        assert_eq!(OctetStringEncoded::new(12).into_inner(), 12);
+    }
 
     #[test]
     fn test_printable_string_new() {
@@ -1582,6 +1625,7 @@ mod tests {
         assert!(!seq2.is_empty());
     }
 
+    #[cfg(feature = "std")]
     fn hash<T: Hash>(v: &T) -> u64 {
         let mut h = DefaultHasher::new();
         v.hash(&mut h);
@@ -1589,40 +1633,64 @@ mod tests {
     }
 
     #[test]
-    fn test_set_of_eq_hash() {
+    fn test_set_of_eq() {
         let s1 = SetOf::<bool>::new(b"");
         let s2 = SetOf::<bool>::new(b"");
         let s3 = SetOf::<bool>::new(b"\x01\x01\x00");
         let s4 = SetOf::<bool>::new(b"\x01\x01\xff");
 
         assert!(s1 == s2);
-        assert_eq!(hash(&s1), hash(&s2));
 
         assert!(s2 != s3);
-        assert_ne!(hash(&s2), hash(&s3));
 
         assert!(s3 == s3);
 
         assert!(s3 != s4);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_set_of_hash() {
+        let s1 = SetOf::<bool>::new(b"");
+        let s2 = SetOf::<bool>::new(b"");
+        let s3 = SetOf::<bool>::new(b"\x01\x01\x00");
+        let s4 = SetOf::<bool>::new(b"\x01\x01\xff");
+
+        assert_eq!(hash(&s1), hash(&s2));
+
+        assert_ne!(hash(&s2), hash(&s3));
+
         assert_ne!(hash(&s3), hash(&s4));
     }
 
     #[test]
-    fn test_sequence_of_eq_hash() {
+    fn test_sequence_of_eq() {
         let s1 = SequenceOf::<bool>::new(b"").unwrap();
         let s2 = SequenceOf::<bool>::new(b"").unwrap();
         let s3 = SequenceOf::<bool>::new(b"\x01\x01\x00").unwrap();
         let s4 = SequenceOf::<bool>::new(b"\x01\x01\xff").unwrap();
 
         assert!(s1 == s2);
-        assert_eq!(hash(&s1), hash(&s2));
 
         assert!(s2 != s3);
-        assert_ne!(hash(&s2), hash(&s3));
 
         assert!(s3 == s3);
 
         assert!(s3 != s4);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_sequence_of_hash() {
+        let s1 = SequenceOf::<bool>::new(b"").unwrap();
+        let s2 = SequenceOf::<bool>::new(b"").unwrap();
+        let s3 = SequenceOf::<bool>::new(b"\x01\x01\x00").unwrap();
+        let s4 = SequenceOf::<bool>::new(b"\x01\x01\xff").unwrap();
+
+        assert_eq!(hash(&s1), hash(&s2));
+
+        assert_ne!(hash(&s2), hash(&s3));
+
         assert_ne!(hash(&s3), hash(&s4));
     }
 

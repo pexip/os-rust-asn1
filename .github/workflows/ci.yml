@@ -16,7 +16,7 @@ jobs:
         RUST:
           - nightly
     steps:
-      - uses: actions/checkout@v3.0.2
+      - uses: actions/checkout@v3.1.0
         with:
           persist-credentials: false
 
@@ -25,7 +25,7 @@ jobs:
           toolchain: ${{ matrix.RUST }}
           components: rustfmt, clippy
 
-      - uses: actions/cache@v3.0.8
+      - uses: actions/cache@v3.0.11
         with:
           path: |
             ~/.cargo/bin/
@@ -75,7 +75,7 @@ jobs:
             FLAGS: "-Z minimal-versions"
 
     steps:
-      - uses: actions/checkout@v3.0.2
+      - uses: actions/checkout@v3.1.0
         with:
           persist-credentials: false
 
@@ -83,7 +83,7 @@ jobs:
         with:
           toolchain: ${{ matrix.RUST.VERSION }}
 
-      - uses: actions/cache@v3.0.8
+      - uses: actions/cache@v3.0.11
         with:
           path: |
             ~/.cargo/bin/
@@ -96,12 +96,12 @@ jobs:
       - run: cargo test ${{ matrix.RUST.FLAGS }}
         if: "${{ !matrix.RUST.SKIP_TESTS }}"
 
-      - run: cargo check ${{ matrix.RUST.FLAGS }}
+      - run: cargo check --tests ${{ matrix.RUST.FLAGS }}
 
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3.0.2
+      - uses: actions/checkout@v3.1.0
         with:
           persist-credentials: false
 
@@ -112,7 +112,7 @@ jobs:
 
       - run: sudo apt update && sudo apt-get install -y lcov
 
-      - uses: actions/cache@v3.0.8
+      - uses: actions/cache@v3.0.11
         id: cargo-cache
         with:
           path: |
@@ -154,7 +154,7 @@ jobs:
 
           genhtml cargo-test.lcov -o coverage-html | tee output.log
 
-      - uses: actions/upload-artifact@v3.1.0
+      - uses: actions/upload-artifact@v3.1.1
         with:
           name: coverage-html
           path: coverage-html
