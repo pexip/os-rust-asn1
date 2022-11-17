@@ -208,12 +208,13 @@ mod tests {
     use crate::types::Asn1Writable;
     use crate::{
         parse_single, BMPString, BigInt, BigUint, BitString, Choice1, Choice2, Choice3, Enumerated,
-        GeneralizedTime, IA5String, ObjectIdentifier, OwnedBitString, PrintableString, Sequence,
-        SequenceOf, SequenceOfWriter, SequenceWriter, SetOf, SetOfWriter, Tlv, UniversalString,
-        UtcTime, Utf8String, VisibleString, WriteError,
+        GeneralizedTime, IA5String, ObjectIdentifier, OctetStringEncoded, OwnedBitString,
+        PrintableString, Sequence, SequenceOf, SequenceOfWriter, SequenceWriter, SetOf,
+        SetOfWriter, Tlv, UniversalString, UtcTime, Utf8String, VisibleString, WriteError,
     };
     #[cfg(feature = "const-generics")]
     use crate::{Explicit, Implicit};
+    use alloc::vec::Vec;
 
     fn assert_writes<T>(data: &[(T, &[u8])])
     where
@@ -262,6 +263,14 @@ mod tests {
             (b"\x01\x02\x03", b"\x04\x03\x01\x02\x03"),
             (b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b"\x04\x81\x81aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             (b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b"\x04\x82\x01\x02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ]);
+    }
+
+    #[test]
+    fn test_write_octet_string_encoded() {
+        assert_writes::<OctetStringEncoded<bool>>(&[
+            (OctetStringEncoded::new(true), b"\x04\x03\x01\x01\xff"),
+            (OctetStringEncoded::new(false), b"\x04\x03\x01\x01\x00"),
         ]);
     }
 
