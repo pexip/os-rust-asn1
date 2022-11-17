@@ -8,13 +8,15 @@ Build-Depends: debhelper (>= 12),
  libstd-rust-dev <!nocheck>,
  librust-asn1-derive-0.12+default-dev (>= 0.12.2-~~) <!nocheck>,
  librust-chrono-0.4+alloc-dev <!nocheck>
-Maintainer: Debian Rust Maintainers <pkg-rust-maintainers@alioth-lists.debian.net>
-Uploaders:
+Maintainer: Pexip AS <packaging@pexip.com>
+XSBC-Pexip-Original-Maintainer: Debian Rust Maintainers <pkg-rust-maintainers@alioth-lists.debian.net>
+XSBC-Pexip-Original-Uploaders:
  Claudius Heine <ch@denx.de>
 Standards-Version: 4.5.1
 Vcs-Git: https://salsa.debian.org/rust-team/debcargo-conf.git [src/asn1]
 Vcs-Browser: https://salsa.debian.org/rust-team/debcargo-conf/tree/master/src/asn1
 Rules-Requires-Root: no
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ sid
 
 Package: librust-asn1-dev
 Architecture: any
