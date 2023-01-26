@@ -6,7 +6,7 @@ Build-Depends: debhelper (>= 12),
  cargo:native <!nocheck>,
  rustc:native <!nocheck>,
  libstd-rust-dev <!nocheck>,
- librust-asn1-derive-0.12+default-dev (>= 0.12.2-~~) <!nocheck>,
+ librust-asn1-derive-0.13+default-dev (>= 0.13.0-~~) <!nocheck>,
  librust-chrono-0.4+alloc-dev <!nocheck>
 Maintainer: Pexip AS <packaging@pexip.com>
 XSBC-Pexip-Original-Maintainer: Debian Rust Maintainers <pkg-rust-maintainers@alioth-lists.debian.net>
@@ -36,14 +36,14 @@ Provides:
  librust-asn1-0+const-generics-dev (= ${binary:Version}),
  librust-asn1-0+fallible-allocations-dev (= ${binary:Version}),
  librust-asn1-0+std-dev (= ${binary:Version}),
- librust-asn1-0.12-dev (= ${binary:Version}),
- librust-asn1-0.12+const-generics-dev (= ${binary:Version}),
- librust-asn1-0.12+fallible-allocations-dev (= ${binary:Version}),
- librust-asn1-0.12+std-dev (= ${binary:Version}),
- librust-asn1-0.12.2-dev (= ${binary:Version}),
- librust-asn1-0.12.2+const-generics-dev (= ${binary:Version}),
- librust-asn1-0.12.2+fallible-allocations-dev (= ${binary:Version}),
- librust-asn1-0.12.2+std-dev (= ${binary:Version})
+ librust-asn1-0.13-dev (= ${binary:Version}),
+ librust-asn1-0.13+const-generics-dev (= ${binary:Version}),
+ librust-asn1-0.13+fallible-allocations-dev (= ${binary:Version}),
+ librust-asn1-0.13+std-dev (= ${binary:Version}),
+ librust-asn1-0.13.0-dev (= ${binary:Version}),
+ librust-asn1-0.13.0+const-generics-dev (= ${binary:Version}),
+ librust-asn1-0.13.0+fallible-allocations-dev (= ${binary:Version}),
+ librust-asn1-0.13.0+std-dev (= ${binary:Version})
 Description: ASN.1 (DER) parser and writer for Rust - Rust source code
  This package contains the source for the Rust asn1 crate, packaged by debcargo
  for use with cargo and dh-cargo.
@@ -54,15 +54,15 @@ Multi-Arch: same
 Depends:
  ${misc:Depends},
  librust-asn1-dev (= ${binary:Version}),
- librust-asn1-derive-0.12+default-dev (>= 0.12.2-~~)
+ librust-asn1-derive-0.13+default-dev (>= 0.13.0-~~)
 Provides:
  librust-asn1+derive-dev (= ${binary:Version}),
  librust-asn1-0+asn1-derive-dev (= ${binary:Version}),
  librust-asn1-0+derive-dev (= ${binary:Version}),
- librust-asn1-0.12+asn1-derive-dev (= ${binary:Version}),
- librust-asn1-0.12+derive-dev (= ${binary:Version}),
- librust-asn1-0.12.2+asn1-derive-dev (= ${binary:Version}),
- librust-asn1-0.12.2+derive-dev (= ${binary:Version})
+ librust-asn1-0.13+asn1-derive-dev (= ${binary:Version}),
+ librust-asn1-0.13+derive-dev (= ${binary:Version}),
+ librust-asn1-0.13.0+asn1-derive-dev (= ${binary:Version}),
+ librust-asn1-0.13.0+derive-dev (= ${binary:Version})
 Description: ASN.1 (DER) parser and writer for Rust - feature "asn1_derive" and 1 more
  This metapackage enables feature "asn1_derive" for the Rust asn1 crate, by
  pulling in any additional dependencies needed by that feature.
@@ -80,8 +80,8 @@ Depends:
  librust-asn1+const-generics-dev (= ${binary:Version})
 Provides:
  librust-asn1-0+default-dev (= ${binary:Version}),
- librust-asn1-0.12+default-dev (= ${binary:Version}),
- librust-asn1-0.12.2+default-dev (= ${binary:Version})
+ librust-asn1-0.13+default-dev (= ${binary:Version}),
+ librust-asn1-0.13.0+default-dev (= ${binary:Version})
 Description: ASN.1 (DER) parser and writer for Rust - feature "default"
  This metapackage enables feature "default" for the Rust asn1 crate, by pulling
  in any additional dependencies needed by that feature.
