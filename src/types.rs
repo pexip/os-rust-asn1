@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::vec;
 use core::borrow::Borrow;
 use core::convert::TryInto;
@@ -44,6 +45,14 @@ impl<'a, T: SimpleAsn1Readable<'a>> Asn1Readable<'a> for T {
     }
 }
 
+impl<'a, T: SimpleAsn1Readable<'a>> SimpleAsn1Readable<'a> for Box<T> {
+    const TAG: Tag = T::TAG;
+
+    fn parse_data(data: &'a [u8]) -> ParseResult<Self> {
+        Ok(Box::new(T::parse_data(data)?))
+    }
+}
+
 /// Any type that can be written as DER ASN.1.
 pub trait Asn1Writable: Sized {
     fn write(&self, dest: &mut Writer) -> WriteResult;
@@ -56,6 +65,15 @@ pub trait SimpleAsn1Writable: Sized {
     fn write_data(&self, dest: &mut WriteBuf) -> WriteResult;
 }
 
+pub trait Asn1DefinedByReadable<'a, T: Asn1Readable<'a>>: Sized {
+    fn parse(item: T, parser: &mut Parser<'a>) -> ParseResult<Self>;
+}
+
+pub trait Asn1DefinedByWritable<T: Asn1Writable>: Sized {
+    fn item(&self) -> &T;
+    fn write(&self, dest: &mut Writer) -> WriteResult;
+}
+
 impl<T: SimpleAsn1Writable> Asn1Writable for T {
     #[inline]
     fn write(&self, w: &mut Writer) -> WriteResult {
@@ -64,6 +82,13 @@ impl<T: SimpleAsn1Writable> Asn1Writable for T {
 }
 
 impl<T: SimpleAsn1Writable> SimpleAsn1Writable for &T {
+    const TAG: Tag = T::TAG;
+    fn write_data(&self, dest: &mut WriteBuf) -> WriteResult {
+        T::write_data(self, dest)
+    }
+}
+
+impl<T: SimpleAsn1Writable> SimpleAsn1Writable for Box<T> {
     const TAG: Tag = T::TAG;
     fn write_data(&self, dest: &mut WriteBuf) -> WriteResult {
         T::write_data(self, dest)
@@ -181,7 +206,7 @@ impl<'a> SimpleAsn1Writable for &'a [u8] {
 
 /// Represents values that are encoded as an `OCTET STRING` containing an
 /// encoded TLV, of type `T`.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct OctetStringEncoded<T>(T);
 
 impl<T> OctetStringEncoded<T> {
@@ -826,8 +851,15 @@ impl SimpleAsn1Readable<'_> for UtcTime {
 
         UtcTime::new(
             chrono::Utc
-                .ymd(year.into(), month.into(), day.into())
-                .and_hms(hour.into(), minute.into(), second.into()),
+                .with_ymd_and_hms(
+                    year.into(),
+                    month.into(),
+                    day.into(),
+                    hour.into(),
+                    minute.into(),
+                    second.into(),
+                )
+                .unwrap(),
         )
         .ok_or_else(|| ParseError::new(ParseErrorKind::InvalidValue))
     }
@@ -894,8 +926,15 @@ impl SimpleAsn1Readable<'_> for GeneralizedTime {
 
         GeneralizedTime::new(
             chrono::Utc
-                .ymd(year.into(), month.into(), day.into())
-                .and_hms(hour.into(), minute.into(), second.into()),
+                .with_ymd_and_hms(
+                    year.into(),
+                    month.into(),
+                    day.into(),
+                    hour.into(),
+                    minute.into(),
+                    second.into(),
+                )
+                .unwrap(),
         )
     }
 }
@@ -1493,6 +1532,15 @@ impl<'a, T: Asn1Writable, const TAG: u32> SimpleAsn1Writable for Explicit<'a, T,
     }
 }
 
+#[derive(PartialEq, Eq, Debug)]
+pub struct DefinedByMarker<T>(core::marker::PhantomData<T>);
+
+impl<T> DefinedByMarker<T> {
+    pub fn marker() -> DefinedByMarker<T> {
+        DefinedByMarker(core::marker::PhantomData)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -1504,7 +1552,7 @@ mod tests {
     use crate::{Explicit, Implicit};
     use alloc::vec;
     use alloc::vec::Vec;
-    use chrono::{TimeZone, Utc};
+    use chrono::{TimeZone, Timelike, Utc};
     #[cfg(feature = "std")]
     use core::hash::{Hash, Hasher};
     #[cfg(feature = "std")]
@@ -1711,27 +1759,39 @@ mod tests {
     }
     #[test]
     fn test_utctime_new() {
-        assert!(UtcTime::new(chrono::Utc.ymd(1950, 1, 1).and_hms(12, 0, 0)).is_some());
-        assert!(UtcTime::new(chrono::Utc.ymd(2050, 1, 1).and_hms(12, 0, 0)).is_none());
+        assert!(
+            UtcTime::new(chrono::Utc.with_ymd_and_hms(1950, 1, 1, 12, 0, 0).unwrap()).is_some()
+        );
+        assert!(
+            UtcTime::new(chrono::Utc.with_ymd_and_hms(2050, 1, 1, 12, 0, 0).unwrap()).is_none()
+        );
     }
 
     #[test]
     fn test_utctime_as_chrono() {
-        let t = Utc.ymd(1951, 5, 6).and_hms(23, 45, 0);
+        let t = Utc.with_ymd_and_hms(1951, 5, 6, 23, 45, 0).unwrap();
         assert_eq!(UtcTime::new(t).unwrap().as_chrono(), &t);
     }
 
     #[test]
     fn test_generalized_time_new() {
-        let t = Utc.ymd(2015, 6, 30).and_hms_nano(23, 59, 59, 1_000_000_000);
+        let t = Utc
+            .with_ymd_and_hms(2015, 6, 30, 23, 59, 59)
+            .unwrap()
+            .with_nanosecond(1_000_000_000)
+            .unwrap();
         assert!(GeneralizedTime::new(t).is_err());
-        let t = Utc.ymd(2015, 6, 30).and_hms_nano(23, 59, 59, 0);
+        let t = Utc
+            .with_ymd_and_hms(2015, 6, 30, 23, 59, 59)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap();
         assert!(GeneralizedTime::new(t).is_ok());
     }
 
     #[test]
     fn test_generalized_time_as_chrono() {
-        let t = Utc.ymd(1951, 5, 6).and_hms(23, 45, 0);
+        let t = Utc.with_ymd_and_hms(1951, 5, 6, 23, 45, 0).unwrap();
         assert_eq!(GeneralizedTime::new(t).unwrap().as_chrono(), &t);
     }
 
