@@ -1,7 +1,8 @@
 To improve compatibility with other rust packages, ease the chrono
 version dependency to 0.4.
 
-This indirectly reverts 9137b7fdccdb3e4a95ed7ae9b4652fbc6a1b4766 of upstream.
+This indirectly reverts 9137b7fdccdb3e4a95ed7ae9b4652fbc6a1b4766 and
+a8d2f669dad8047ca17f5d18cf9498bda8a73e28 of upstream.
 
 Upstream commented that the version dependency was made more strict,
 because of a RUSTSEC in regards to chrono fix, which however doesn't affect
@@ -9,12 +10,196 @@ their (asn1) usage.
 
 --- a/Cargo.toml.x	2022-09-07 08:15:26.234109943 +0000
 +++ a/Cargo.toml	2022-09-07 08:15:35.585871922 +0000
-@@ -25,7 +25,7 @@
- optional = true
+@@ -24,7 +24,7 @@
+ version = "0.13.0"
  
  [dependencies.chrono]
--version = "0.4.20"
+-version = "0.4.23"
 +version = "0.4"
  features = ["alloc"]
  default-features = false
  
+diff --git a/src/parser.rs b/src/parser.rs
+index d31f6ea..598046a 100644
+--- a/src/parser.rs
++++ b/src/parser.rs
+@@ -1116,7 +1116,7 @@ mod tests {
+                 b"\x17\x0f5105062345+0000",
+             ),
+             (
+-                Ok(UtcTime::new(Utc.with_ymd_and_hms(1991, 5, 6, 23, 45, 40).unwrap()).unwrap()),
++                Ok(UtcTime::new(Utc.ymd(1991, 5, 6).and_hms(23, 45, 40)).unwrap()),
+                 b"\x17\x0d910506234540Z",
+             ),
+             (
+@@ -1244,10 +1244,7 @@ mod tests {
+     fn test_generalizedtime() {
+         assert_parses::<GeneralizedTime>(&[
+             (
+-                Ok(
+-                    GeneralizedTime::new(Utc.with_ymd_and_hms(2010, 1, 2, 3, 4, 5).unwrap())
+-                        .unwrap(),
+-                ),
++                Ok(GeneralizedTime::new(Utc.ymd(2010, 1, 2).and_hms(3, 4, 5)).unwrap()),
+                 b"\x18\x0f20100102030405Z",
+             ),
+             (
+@@ -1264,10 +1261,7 @@ mod tests {
+             ),
+             (
+                 // 29th of February (Leap Year)
+-                Ok(
+-                    GeneralizedTime::new(Utc.with_ymd_and_hms(2000, 2, 29, 3, 4, 5).unwrap())
+-                        .unwrap(),
+-                ),
++                Ok(GeneralizedTime::new(Utc.ymd(2000, 2, 29).and_hms(3, 4, 5)).unwrap()),
+                 b"\x18\x0f20000229030405Z",
+             ),
+             (
+diff --git a/src/types.rs b/src/types.rs
+index 0ad2040..4984c33 100644
+--- a/src/types.rs
++++ b/src/types.rs
+@@ -206,7 +206,7 @@ impl<'a> SimpleAsn1Writable for &'a [u8] {
+ 
+ /// Represents values that are encoded as an `OCTET STRING` containing an
+ /// encoded TLV, of type `T`.
+-#[derive(PartialEq, Eq, Debug)]
++#[derive(PartialEq, Debug)]
+ pub struct OctetStringEncoded<T>(T);
+ 
+ impl<T> OctetStringEncoded<T> {
+@@ -851,15 +851,8 @@ impl SimpleAsn1Readable<'_> for UtcTime {
+ 
+         UtcTime::new(
+             chrono::Utc
+-                .with_ymd_and_hms(
+-                    year.into(),
+-                    month.into(),
+-                    day.into(),
+-                    hour.into(),
+-                    minute.into(),
+-                    second.into(),
+-                )
+-                .unwrap(),
++                .ymd(year.into(), month.into(), day.into())
++                .and_hms(hour.into(), minute.into(), second.into()),
+         )
+         .ok_or_else(|| ParseError::new(ParseErrorKind::InvalidValue))
+     }
+@@ -926,15 +919,8 @@ impl SimpleAsn1Readable<'_> for GeneralizedTime {
+ 
+         GeneralizedTime::new(
+             chrono::Utc
+-                .with_ymd_and_hms(
+-                    year.into(),
+-                    month.into(),
+-                    day.into(),
+-                    hour.into(),
+-                    minute.into(),
+-                    second.into(),
+-                )
+-                .unwrap(),
++                .ymd(year.into(), month.into(), day.into())
++                .and_hms(hour.into(), minute.into(), second.into()),
+         )
+     }
+ }
+@@ -1552,7 +1538,7 @@ mod tests {
+     use crate::{Explicit, Implicit};
+     use alloc::vec;
+     use alloc::vec::Vec;
+-    use chrono::{TimeZone, Timelike, Utc};
++    use chrono::{TimeZone, Utc};
+     #[cfg(feature = "std")]
+     use core::hash::{Hash, Hasher};
+     #[cfg(feature = "std")]
+@@ -1759,39 +1745,27 @@ mod tests {
+     }
+     #[test]
+     fn test_utctime_new() {
+-        assert!(
+-            UtcTime::new(chrono::Utc.with_ymd_and_hms(1950, 1, 1, 12, 0, 0).unwrap()).is_some()
+-        );
+-        assert!(
+-            UtcTime::new(chrono::Utc.with_ymd_and_hms(2050, 1, 1, 12, 0, 0).unwrap()).is_none()
+-        );
++        assert!(UtcTime::new(chrono::Utc.ymd(1950, 1, 1).and_hms(12, 0, 0)).is_some());
++        assert!(UtcTime::new(chrono::Utc.ymd(2050, 1, 1).and_hms(12, 0, 0)).is_none());
+     }
+ 
+     #[test]
+     fn test_utctime_as_chrono() {
+-        let t = Utc.with_ymd_and_hms(1951, 5, 6, 23, 45, 0).unwrap();
++        let t = Utc.ymd(1951, 5, 6).and_hms(23, 45, 0);
+         assert_eq!(UtcTime::new(t).unwrap().as_chrono(), &t);
+     }
+ 
+     #[test]
+     fn test_generalized_time_new() {
+-        let t = Utc
+-            .with_ymd_and_hms(2015, 6, 30, 23, 59, 59)
+-            .unwrap()
+-            .with_nanosecond(1_000_000_000)
+-            .unwrap();
++        let t = Utc.ymd(2015, 6, 30).and_hms_nano(23, 59, 59, 1_000_000_000);
+         assert!(GeneralizedTime::new(t).is_err());
+-        let t = Utc
+-            .with_ymd_and_hms(2015, 6, 30, 23, 59, 59)
+-            .unwrap()
+-            .with_nanosecond(0)
+-            .unwrap();
++        let t = Utc.ymd(2015, 6, 30).and_hms_nano(23, 59, 59, 0);
+         assert!(GeneralizedTime::new(t).is_ok());
+     }
+ 
+     #[test]
+     fn test_generalized_time_as_chrono() {
+-        let t = Utc.with_ymd_and_hms(1951, 5, 6, 23, 45, 0).unwrap();
++        let t = Utc.ymd(1951, 5, 6).and_hms(23, 45, 0);
+         assert_eq!(GeneralizedTime::new(t).unwrap().as_chrono(), &t);
+     }
+ 
+diff --git a/src/writer.rs b/src/writer.rs
+index 6554dc9..a5e5d02 100644
+--- a/src/writer.rs
++++ b/src/writer.rs
+@@ -470,15 +470,15 @@ mod tests {
+     fn test_write_utctime() {
+         assert_writes::<UtcTime>(&[
+             (
+-                UtcTime::new(Utc.with_ymd_and_hms(1991, 5, 6, 23, 45, 40).unwrap()).unwrap(),
++                UtcTime::new(Utc.ymd(1991, 5, 6).and_hms(23, 45, 40)).unwrap(),
+                 b"\x17\x0d910506234540Z",
+             ),
+             (
+-                UtcTime::new(Utc.timestamp_opt(0, 0).unwrap()).unwrap(),
++                UtcTime::new(Utc.timestamp(0, 0)).unwrap(),
+                 b"\x17\x0d700101000000Z",
+             ),
+             (
+-                UtcTime::new(Utc.timestamp_opt(1258325776, 0).unwrap()).unwrap(),
++                UtcTime::new(Utc.timestamp(1258325776, 0)).unwrap(),
+                 b"\x17\x0d091115225616Z",
+             ),
+         ]);
+@@ -488,16 +488,15 @@ mod tests {
+     fn test_write_generalizedtime() {
+         assert_writes(&[
+             (
+-                GeneralizedTime::new(Utc.with_ymd_and_hms(1991, 5, 6, 23, 45, 40).unwrap())
+-                    .unwrap(),
++                GeneralizedTime::new(Utc.ymd(1991, 5, 6).and_hms(23, 45, 40)).unwrap(),
+                 b"\x18\x0f19910506234540Z",
+             ),
+             (
+-                GeneralizedTime::new(Utc.timestamp_opt(0, 0).unwrap()).unwrap(),
++                GeneralizedTime::new(Utc.timestamp(0, 0)).unwrap(),
+                 b"\x18\x0f19700101000000Z",
+             ),
+             (
+-                GeneralizedTime::new(Utc.timestamp_opt(1258325776, 0).unwrap()).unwrap(),
++                GeneralizedTime::new(Utc.timestamp(1258325776, 0)).unwrap(),
+                 b"\x18\x0f20091115225616Z",
+             ),
+         ]);
