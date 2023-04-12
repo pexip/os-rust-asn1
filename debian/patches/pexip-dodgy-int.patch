@@ -1,0 +1,139 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 713e815..d2845c5 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -158,6 +158,7 @@ pub use crate::types::{
+     Null, OctetStringEncoded, PrintableString, Sequence, SequenceOf, SequenceOfWriter,
+     SequenceWriter, SetOf, SetOfWriter, SimpleAsn1Readable, SimpleAsn1Writable, Tlv,
+     UniversalString, UtcTime, Utf8String, VisibleString,
++    BigDodgyPaddedInt,
+ };
+ #[cfg(feature = "const-generics")]
+ pub use crate::types::{Explicit, Implicit};
+diff --git a/src/parser.rs b/src/parser.rs
+index d31f6ea..6c3342b 100644
+--- a/src/parser.rs
++++ b/src/parser.rs
+@@ -351,6 +351,7 @@ mod tests {
+         GeneralizedTime, IA5String, ObjectIdentifier, OctetStringEncoded, OwnedBitString,
+         ParseError, ParseErrorKind, ParseLocation, ParseResult, PrintableString, Sequence,
+         SequenceOf, SetOf, Tag, Tlv, UniversalString, UtcTime, Utf8String, VisibleString,
++        BigDodgyPaddedInt,
+     };
+     #[cfg(feature = "const-generics")]
+     use crate::{Explicit, Implicit};
+@@ -894,6 +895,34 @@ mod tests {
+         ]);
+     }
+ 
++    #[test]
++    fn test_parse_bigdodgypaddedint() {
++        assert_parses::<BigDodgyPaddedInt>(&[
++            (Ok(BigDodgyPaddedInt::new(b"\x80").unwrap()), b"\x02\x01\x80"),
++            (Ok(BigDodgyPaddedInt::new(b"\xff").unwrap()), b"\x02\x01\xff"),
++            (
++                Ok(BigDodgyPaddedInt::new(b"\x20\x3b\x47\x09\xfe\xe2\x7d").unwrap()),
++                b"\x02\x08\x00\x20\x3b\x47\x09\xfe\xe2\x7d"
++            ),
++            (
++                Ok(BigDodgyPaddedInt::new(b"\x00\xff\xff").unwrap()),
++                b"\x02\x03\x00\xff\xff",
++            ),
++            (
++                Ok(BigDodgyPaddedInt::new(b"\xff").unwrap()),
++                b"\x02\x02\xff\xff",
++            ),
++            (
++                Ok(BigDodgyPaddedInt::new(b"\xff\x7f\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff").unwrap()),
++                b"\x02\x0c\xff\x7f\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff",
++            ),
++            (
++                Err(ParseError::new(ParseErrorKind::InvalidValue)),
++                b"\x02\x00",
++            ),
++        ]);
++    }
++
+     #[test]
+     fn test_parse_object_identifier() {
+         assert_parses::<ObjectIdentifier>(&[
+diff --git a/src/types.rs b/src/types.rs
+index 0ad2040..e39d5be 100644
+--- a/src/types.rs
++++ b/src/types.rs
+@@ -546,14 +546,20 @@ impl<'a> SimpleAsn1Writable for UniversalString<'a> {
+ }
+ 
+ fn validate_integer(data: &[u8], signed: bool) -> ParseResult<()> {
++    validate_integer_padding(data, signed, false)
++}
++
++fn validate_integer_padding(data: &[u8], signed: bool, permit_dodgy_padding: bool) -> ParseResult<()> {
+     if data.is_empty() {
+         return Err(ParseError::new(ParseErrorKind::InvalidValue));
+     }
+-    // Ensure integer is minimally encoded
+-    if data.len() > 1
+-        && ((data[0] == 0 && data[1] & 0x80 == 0) || (data[0] == 0xff && data[1] & 0x80 == 0x80))
+-    {
+-        return Err(ParseError::new(ParseErrorKind::InvalidValue));
++    if !permit_dodgy_padding {
++        // Ensure integer is minimally encoded
++        if data.len() > 1
++            && ((data[0] == 0 && data[1] & 0x80 == 0) || (data[0] == 0xff && data[1] & 0x80 == 0x80))
++        {
++            return Err(ParseError::new(ParseErrorKind::InvalidValue));
++        }
+     }
+ 
+     // Reject negatives for unsigned types.
+@@ -692,6 +698,49 @@ impl<'a> SimpleAsn1Writable for BigInt<'a> {
+     }
+ }
+ 
++/// Arbitrary sized signed integer. Contents may be accessed as `&[u8]` of
++/// big-endian data. Its contents always match the DER encoding of a value
++/// (i.e. they are minimal)
++#[derive(PartialEq, Clone, Copy, Debug, Hash, Eq)]
++pub struct BigDodgyPaddedInt<'a> {
++    data: &'a [u8],
++}
++
++impl<'a> BigDodgyPaddedInt<'a> {
++    /// Create a new `BigInt` from already encoded data. `data` must be encoded
++    /// as required by DER: minimally and if the high bit would be set in the
++    /// first octet, a leading `\x00` should be prepended (to disambiguate from
++    /// negative values).
++    pub fn new(data: &'a [u8]) -> Option<Self> {
++        validate_integer_padding(data, true, true).ok()?;
++        let mut d = data;
++        while d.len() > 1
++            && ((d[0] == 0 && d[1] & 0x80 == 0) || (d[0] == 0xff && d[1] & 0x80 == 0x80))
++        {
++            d = &d[1..];
++        }
++        Some(BigDodgyPaddedInt { data: d })
++    }
++
++    /// Returns the contents of the integer as big-endian bytes.
++    pub fn as_bytes(&self) -> &'a [u8] {
++        self.data
++    }
++}
++
++impl<'a> SimpleAsn1Readable<'a> for BigDodgyPaddedInt<'a> {
++    const TAG: Tag = Tag::primitive(0x02);
++    fn parse_data(data: &'a [u8]) -> ParseResult<Self> {
++        BigDodgyPaddedInt::new(data).ok_or_else(|| ParseError::new(ParseErrorKind::InvalidValue))
++    }
++}
++impl<'a> SimpleAsn1Writable for BigDodgyPaddedInt<'a> {
++    const TAG: Tag = Tag::primitive(0x02);
++    fn write_data(&self, dest: &mut WriteBuf) -> WriteResult {
++        dest.push_slice(self.as_bytes())
++    }
++}
++
+ impl<'a> SimpleAsn1Readable<'a> for ObjectIdentifier {
+     const TAG: Tag = Tag::primitive(0x06);
+     fn parse_data(data: &'a [u8]) -> ParseResult<ObjectIdentifier> {

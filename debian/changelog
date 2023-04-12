@@ -1,3 +1,10 @@
+rust-asn1 (0.13.0-0pexip3) pexip; urgency=medium
+
+  * Added BigDodgyPaddedInt to cope with OpenSSL 1.0's dodgy serialisation of
+    serial numbers.
+
+ -- Huw Jones <huw@pexip.com>  Wed, 12 Apr 2023 15:02:31 +0100
+
 rust-asn1 (0.13.0-0pexip2) pexip; urgency=medium
 
   * Fix provides directives
