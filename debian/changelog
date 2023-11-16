@@ -1,3 +1,9 @@
+rust-asn1 (0.13.0-0pexip4) pexip-bookworm; urgency=medium
+
+  * Initial bookworm build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Thu, 16 Nov 2023 10:28:48 +0000
+
 rust-asn1 (0.13.0-0pexip3) pexip; urgency=medium
 
   * Added BigDodgyPaddedInt to cope with OpenSSL 1.0's dodgy serialisation of
