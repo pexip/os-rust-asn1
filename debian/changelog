@@ -1,3 +1,9 @@
+rust-asn1 (0.13.0-0pexip5) pexip-bookworm; urgency=medium
+
+  * Bookworm build for product distribution
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Sat, 09 Dec 2023 22:58:06 +0000
+
 rust-asn1 (0.13.0-0pexip4) pexip-bookworm; urgency=medium
 
   * Initial bookworm build
