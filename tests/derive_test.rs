@@ -1,5 +1,3 @@
-#![cfg(feature = "derive")]
-
 use std::fmt;
 
 fn assert_roundtrips<
@@ -216,7 +214,31 @@ fn test_default() {
 }
 
 #[test]
-#[cfg(feature = "const-generics")]
+fn test_default_not_literal() {
+    const OID1: asn1::ObjectIdentifier = asn1::oid!(1, 2, 3);
+    const OID2: asn1::ObjectIdentifier = asn1::oid!(1, 2, 3, 4);
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct DefaultFields {
+        #[default(OID1)]
+        a: asn1::ObjectIdentifier,
+    }
+
+    assert_roundtrips(&[
+        (Ok(DefaultFields { a: OID1 }), b"\x30\x00"),
+        (
+            Ok(DefaultFields { a: OID2 }),
+            b"\x30\x05\x06\x03\x2a\x03\x04",
+        ),
+        (
+            Err(asn1::ParseError::new(asn1::ParseErrorKind::EncodedDefault)
+                .add_location(asn1::ParseLocation::Field("DefaultFields::a"))),
+            b"\x30\x04\x06\x02\x2a\x03",
+        ),
+    ]);
+}
+
+#[test]
 fn test_default_const_generics() {
     #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug)]
     struct DefaultFields<'a> {
@@ -481,6 +503,171 @@ fn test_required_explicit() {
             })
             .add_location(asn1::ParseLocation::Field("RequiredExplicit::value"))),
             b"\x30\x03\x0b\x01\x00",
+        ),
+    ]);
+}
+
+#[test]
+fn test_defined_by() {
+    const OID1: asn1::ObjectIdentifier = asn1::oid!(1, 2, 3);
+    const OID2: asn1::ObjectIdentifier = asn1::oid!(1, 2, 5);
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct S<'a> {
+        oid: asn1::DefinedByMarker<asn1::ObjectIdentifier>,
+        #[defined_by(oid)]
+        value: Value<'a>,
+    }
+
+    #[derive(asn1::Asn1DefinedByRead, asn1::Asn1DefinedByWrite, PartialEq, Debug, Eq)]
+    enum Value<'a> {
+        #[defined_by(OID1)]
+        OctetString(&'a [u8]),
+        #[defined_by(OID2)]
+        Integer(u32),
+    }
+
+    assert_roundtrips::<S>(&[
+        (
+            Ok(S {
+                oid: asn1::DefinedByMarker::marker(),
+                value: Value::OctetString(b"abc"),
+            }),
+            b"\x30\x09\x06\x02\x2a\x03\x04\x03abc",
+        ),
+        (
+            Ok(S {
+                oid: asn1::DefinedByMarker::marker(),
+                value: Value::Integer(17),
+            }),
+            b"\x30\x07\x06\x02\x2a\x05\x02\x01\x11",
+        ),
+        (
+            Err(
+                asn1::ParseError::new(asn1::ParseErrorKind::UnknownDefinedBy)
+                    .add_location(asn1::ParseLocation::Field("S::value")),
+            ),
+            b"\x30\x04\x06\x02\x2a\x07",
+        ),
+    ]);
+}
+
+#[test]
+fn test_defined_by_default() {
+    const OID1: asn1::ObjectIdentifier = asn1::oid!(1, 2, 3);
+    const OID2: asn1::ObjectIdentifier = asn1::oid!(1, 2, 5);
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct S<'a> {
+        oid: asn1::DefinedByMarker<asn1::ObjectIdentifier>,
+        #[defined_by(oid)]
+        value: Value<'a>,
+    }
+
+    #[derive(asn1::Asn1DefinedByRead, asn1::Asn1DefinedByWrite, PartialEq, Debug, Eq)]
+    enum Value<'a> {
+        #[defined_by(OID1)]
+        Integer(u32),
+        #[default]
+        Other(asn1::ObjectIdentifier, asn1::Tlv<'a>),
+    }
+
+    assert_roundtrips::<S>(&[
+        (
+            Ok(S {
+                oid: asn1::DefinedByMarker::marker(),
+                value: Value::Integer(7),
+            }),
+            b"\x30\x07\x06\x02\x2a\x03\x02\x01\x07",
+        ),
+        (
+            Ok(S {
+                oid: asn1::DefinedByMarker::marker(),
+                value: Value::Other(OID2, asn1::parse_single(b"\x05\x00").unwrap()),
+            }),
+            b"\x30\x06\x06\x02\x2a\x05\x05\x00",
+        ),
+    ])
+}
+
+#[test]
+fn test_defined_by_optional() {
+    const OID1: asn1::ObjectIdentifier = asn1::oid!(1, 2, 3);
+    const OID2: asn1::ObjectIdentifier = asn1::oid!(1, 2, 5);
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct S<'a> {
+        oid: asn1::DefinedByMarker<asn1::ObjectIdentifier>,
+        #[defined_by(oid)]
+        value: Value<'a>,
+    }
+
+    #[derive(asn1::Asn1DefinedByRead, asn1::Asn1DefinedByWrite, PartialEq, Debug, Eq)]
+    enum Value<'a> {
+        #[defined_by(OID1)]
+        OctetString(&'a [u8]),
+        #[defined_by(OID2)]
+        Other,
+    }
+
+    assert_roundtrips::<S>(&[
+        (
+            Ok(S {
+                oid: asn1::DefinedByMarker::marker(),
+                value: Value::OctetString(b"abc"),
+            }),
+            b"\x30\x09\x06\x02\x2a\x03\x04\x03abc",
+        ),
+        (
+            Ok(S {
+                oid: asn1::DefinedByMarker::marker(),
+                value: Value::Other,
+            }),
+            b"\x30\x04\x06\x02\x2a\x05",
+        ),
+        (
+            Err(
+                asn1::ParseError::new(asn1::ParseErrorKind::UnknownDefinedBy)
+                    .add_location(asn1::ParseLocation::Field("S::value")),
+            ),
+            b"\x30\x04\x06\x02\x2a\x07",
+        ),
+    ]);
+}
+
+#[test]
+fn test_defined_by_mod() {
+    mod oids {
+        pub const OID1: asn1::ObjectIdentifier = asn1::oid!(1, 2, 3);
+    }
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct S<'a> {
+        oid: asn1::DefinedByMarker<asn1::ObjectIdentifier>,
+        #[defined_by(oid)]
+        value: Value<'a>,
+    }
+
+    #[derive(asn1::Asn1DefinedByRead, asn1::Asn1DefinedByWrite, PartialEq, Debug, Eq)]
+    enum Value<'a> {
+        #[defined_by(oids::OID1)]
+        OctetString(&'a [u8]),
+    }
+
+    assert_roundtrips::<S>(&[
+        (
+            Ok(S {
+                oid: asn1::DefinedByMarker::marker(),
+                value: Value::OctetString(b"abc"),
+            }),
+            b"\x30\x09\x06\x02\x2a\x03\x04\x03abc",
+        ),
+        (
+            Err(
+                asn1::ParseError::new(asn1::ParseErrorKind::UnknownDefinedBy)
+                    .add_location(asn1::ParseLocation::Field("S::value")),
+            ),
+            b"\x30\x04\x06\x02\x2a\x07",
         ),
     ]);
 }
