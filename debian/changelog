@@ -1,3 +1,9 @@
+rust-asn1 (0.13.0-0+pexip24u6) pexip-bookworm; urgency=medium
+
+  * New versioning scheme
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Thu, 01 Feb 2024 16:29:19 +0000
+
 rust-asn1 (0.13.0-0pexip5) pexip-bookworm; urgency=medium
 
   * Bookworm build for product distribution
