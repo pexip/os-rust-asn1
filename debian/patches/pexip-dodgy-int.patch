@@ -3,26 +3,26 @@ index 713e815..d2845c5 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -158,6 +158,7 @@ pub use crate::types::{
-     Null, OctetStringEncoded, PrintableString, Sequence, SequenceOf, SequenceOfWriter,
-     SequenceWriter, SetOf, SetOfWriter, SimpleAsn1Readable, SimpleAsn1Writable, Tlv,
-     UniversalString, UtcTime, Utf8String, VisibleString,
+     GeneralizedTime, IA5String, Implicit, Null, OctetStringEncoded, PrintableString, Sequence,
+     SequenceOf, SequenceOfWriter, SequenceWriter, SetOf, SetOfWriter, SimpleAsn1Readable,
+     SimpleAsn1Writable, Tlv, UniversalString, UtcTime, Utf8String, VisibleString,
 +    BigDodgyPaddedInt,
  };
- #[cfg(feature = "const-generics")]
- pub use crate::types::{Explicit, Implicit};
+ pub use crate::writer::{write, write_single, WriteBuf, WriteError, WriteResult, Writer};
+ 
 diff --git a/src/parser.rs b/src/parser.rs
 index d31f6ea..6c3342b 100644
 --- a/src/parser.rs
 +++ b/src/parser.rs
-@@ -351,6 +351,7 @@ mod tests {
-         GeneralizedTime, IA5String, ObjectIdentifier, OctetStringEncoded, OwnedBitString,
-         ParseError, ParseErrorKind, ParseLocation, ParseResult, PrintableString, Sequence,
-         SequenceOf, SetOf, Tag, Tlv, UniversalString, UtcTime, Utf8String, VisibleString,
+@@ -297,6 +297,7 @@ mod tests {
+         Explicit, GeneralizedTime, IA5String, Implicit, ObjectIdentifier, OctetStringEncoded,
+         OwnedBitString, ParseError, ParseErrorKind, ParseLocation, ParseResult, PrintableString,
+         Sequence, SequenceOf, SetOf, Tag, Tlv, UniversalString, UtcTime, Utf8String, VisibleString,
 +        BigDodgyPaddedInt,
      };
-     #[cfg(feature = "const-generics")]
-     use crate::{Explicit, Implicit};
-@@ -894,6 +895,34 @@ mod tests {
+     use alloc::boxed::Box;
+     use alloc::{format, vec};
+@@ -867,6 +868,34 @@ mod tests {
          ]);
      }
  
@@ -61,7 +61,7 @@ diff --git a/src/types.rs b/src/types.rs
 index 0ad2040..e39d5be 100644
 --- a/src/types.rs
 +++ b/src/types.rs
-@@ -546,14 +546,20 @@ impl<'a> SimpleAsn1Writable for UniversalString<'a> {
+@@ -544,14 +544,20 @@ impl<'a> SimpleAsn1Writable for UniversalString<'a> {
  }
  
  fn validate_integer(data: &[u8], signed: bool) -> ParseResult<()> {
