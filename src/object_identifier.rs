@@ -15,8 +15,8 @@ const MAX_OID_LENGTH: usize = 63;
 /// rust-asn1 stores `ObjectIdentifier`s in a fixed-size buffer, therefore
 /// they are limited to OID values whose DER encoding fits into that buffer.
 /// This buffer is sufficiently large to fit all known publically known OIDs,
-/// so this should not effect most people.
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+/// so this should not affect most people.
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub struct ObjectIdentifier {
     // Store the OID as DER encoded.
     der_encoded: [u8; MAX_OID_LENGTH],
@@ -89,11 +89,11 @@ impl ObjectIdentifier {
     }
 }
 
-impl fmt::Display for ObjectIdentifier {
-    /// Converts an `ObjectIdentifier` to a dotted string, e.g.
-    /// "1.2.840.113549".
+struct OidFormatter<'a>(&'a ObjectIdentifier);
+
+impl fmt::Debug for OidFormatter<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut parsed = (0, self.as_der());
+        let mut parsed = (0, self.0.as_der());
 
         parsed = base128::read_base128_int(parsed.1).unwrap();
         if parsed.0 < 80 {
@@ -111,11 +111,28 @@ impl fmt::Display for ObjectIdentifier {
     }
 }
 
+impl fmt::Debug for ObjectIdentifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObjectIdentifier")
+            .field("oid", &OidFormatter(self))
+            .finish()
+    }
+}
+
+impl fmt::Display for ObjectIdentifier {
+    /// Converts an `ObjectIdentifier` to a dotted string, e.g.
+    /// "1.2.840.113549".
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&OidFormatter(self), f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::MAX_OID_LENGTH;
-    use crate::alloc::string::ToString;
     use crate::{ObjectIdentifier, ParseError, ParseErrorKind};
+    use alloc::format;
+    use alloc::string::ToString;
 
     #[test]
     fn test_object_identifier_from_string() {
@@ -165,6 +182,12 @@ mod tests {
     }
 
     #[test]
+    fn test_debug() {
+        let oid = ObjectIdentifier::from_string("1.2.3.4").unwrap();
+        assert_eq!(format!("{:?}", oid), "ObjectIdentifier { oid: 1.2.3.4 }");
+    }
+
+    #[test]
     fn test_to_string() {
         for val in &[
             "0.4",
@@ -174,6 +197,7 @@ mod tests {
             "1.2.3.4",
             "1.2.840.133549.1.1.5",
             "2.100.3",
+            "2.1.750304883",
         ] {
             assert_eq!(
                 &ObjectIdentifier::from_string(val).unwrap().to_string(),
