@@ -154,13 +154,11 @@ pub use crate::parser::{
 pub use crate::tag::Tag;
 pub use crate::types::{
     Asn1DefinedByReadable, Asn1DefinedByWritable, Asn1Readable, Asn1Writable, BMPString, BigInt,
-    BigUint, Choice1, Choice2, Choice3, DefinedByMarker, Enumerated, GeneralizedTime, IA5String,
-    Null, OctetStringEncoded, PrintableString, Sequence, SequenceOf, SequenceOfWriter,
-    SequenceWriter, SetOf, SetOfWriter, SimpleAsn1Readable, SimpleAsn1Writable, Tlv,
-    UniversalString, UtcTime, Utf8String, VisibleString,
+    BigUint, Choice1, Choice2, Choice3, DateTime, DefinedByMarker, Enumerated, Explicit,
+    GeneralizedTime, IA5String, Implicit, Null, OctetStringEncoded, PrintableString, Sequence,
+    SequenceOf, SequenceOfWriter, SequenceWriter, SetOf, SetOfWriter, SimpleAsn1Readable,
+    SimpleAsn1Writable, Tlv, UniversalString, UtcTime, Utf8String, VisibleString,
 };
-#[cfg(feature = "const-generics")]
-pub use crate::types::{Explicit, Implicit};
 pub use crate::writer::{write, write_single, WriteBuf, WriteError, WriteResult, Writer};
 
 pub use asn1_derive::{oid, Asn1DefinedByRead, Asn1DefinedByWrite, Asn1Read, Asn1Write};
@@ -207,10 +205,10 @@ pub const fn explicit_tag(tag: u32) -> Tag {
 /// considered a part of the supported API surface.
 #[doc(hidden)]
 pub fn read_defined_by<'a, T: Asn1Readable<'a>, U: Asn1DefinedByReadable<'a, T>>(
-    v: (T, DefinedByMarker<T>),
+    v: T,
     p: &mut Parser<'a>,
 ) -> ParseResult<U> {
-    U::parse(v.0, p)
+    U::parse(v, p)
 }
 
 /// This API is public so that it may be used from macros, but should not be

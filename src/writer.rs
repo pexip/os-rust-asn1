@@ -1,7 +1,7 @@
 use crate::types::{Asn1Writable, SimpleAsn1Writable};
 use crate::Tag;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{fmt, vec};
 
 /// `WriteError` are returned when there is an error writing the ASN.1 data.
 ///
@@ -13,6 +13,17 @@ use alloc::vec::Vec;
 pub enum WriteError {
     AllocationError,
 }
+
+impl fmt::Display for WriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WriteError::AllocationError => write!(f, "allocation error"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for WriteError {}
 
 pub type WriteResult<T = ()> = Result<T, WriteError>;
 
@@ -71,6 +82,7 @@ fn _length_length(length: usize) -> u8 {
     }
     num_bytes
 }
+
 fn _insert_at_position(buf: &mut WriteBuf, pos: usize, data: &[u8]) -> WriteResult {
     for _ in 0..data.len() {
         buf.push_byte(0)?;
@@ -164,6 +176,11 @@ impl Writer<'_> {
         self.buf.push_byte(0)?;
         let start_len = self.buf.len();
         body(self.buf)?;
+        self.insert_length(start_len)
+    }
+
+    #[inline]
+    fn insert_length(&mut self, start_len: usize) -> WriteResult {
         let added_len = self.buf.len() - start_len;
         if added_len >= 128 {
             let n = _length_length(added_len);
@@ -203,18 +220,15 @@ mod tests {
     use alloc::boxed::Box;
     use alloc::vec;
 
-    use chrono::{TimeZone, Utc};
-
     use super::{_insert_at_position, write, write_single, WriteBuf, Writer};
     use crate::types::Asn1Writable;
     use crate::{
-        parse_single, BMPString, BigInt, BigUint, BitString, Choice1, Choice2, Choice3, Enumerated,
-        GeneralizedTime, IA5String, ObjectIdentifier, OctetStringEncoded, OwnedBitString,
-        PrintableString, Sequence, SequenceOf, SequenceOfWriter, SequenceWriter, SetOf,
-        SetOfWriter, Tlv, UniversalString, UtcTime, Utf8String, VisibleString, WriteError,
+        parse_single, BMPString, BigInt, BigUint, BitString, Choice1, Choice2, Choice3, DateTime,
+        Enumerated, Explicit, GeneralizedTime, IA5String, Implicit, ObjectIdentifier,
+        OctetStringEncoded, OwnedBitString, PrintableString, Sequence, SequenceOf,
+        SequenceOfWriter, SequenceWriter, SetOf, SetOfWriter, Tlv, UniversalString, UtcTime,
+        Utf8String, VisibleString, WriteError,
     };
-    #[cfg(feature = "const-generics")]
-    use crate::{Explicit, Implicit};
     use alloc::vec::Vec;
 
     fn assert_writes<T>(data: &[(T, &[u8])])
@@ -376,6 +390,28 @@ mod tests {
     }
 
     #[test]
+    fn test_write_u16() {
+        assert_writes::<u16>(&[
+            (0, b"\x02\x01\x00"),
+            (1, b"\x02\x01\x01"),
+            (256, b"\x02\x02\x01\x00"),
+            (65535, b"\x02\x03\x00\xff\xff"),
+        ]);
+    }
+
+    #[test]
+    fn test_write_i16() {
+        assert_writes::<i16>(&[
+            (0, b"\x02\x01\x00"),
+            (1, b"\x02\x01\x01"),
+            (-256, b"\x02\x02\xff\x00"),
+            (-1, b"\x02\x01\xff"),
+            (-32768, b"\x02\x02\x80\x00"),
+            (32767, b"\x02\x02\x7f\xff"),
+        ]);
+    }
+
+    #[test]
     fn test_write_u8() {
         assert_writes::<u8>(&[
             (0, b"\x02\x01\x00"),
@@ -470,15 +506,15 @@ mod tests {
     fn test_write_utctime() {
         assert_writes::<UtcTime>(&[
             (
-                UtcTime::new(Utc.with_ymd_and_hms(1991, 5, 6, 23, 45, 40).unwrap()).unwrap(),
+                UtcTime::new(DateTime::new(1991, 5, 6, 23, 45, 40).unwrap()).unwrap(),
                 b"\x17\x0d910506234540Z",
             ),
             (
-                UtcTime::new(Utc.timestamp_opt(0, 0).unwrap()).unwrap(),
+                UtcTime::new(DateTime::new(1970, 1, 1, 0, 0, 0).unwrap()).unwrap(),
                 b"\x17\x0d700101000000Z",
             ),
             (
-                UtcTime::new(Utc.timestamp_opt(1258325776, 0).unwrap()).unwrap(),
+                UtcTime::new(DateTime::new(2009, 11, 15, 22, 56, 16).unwrap()).unwrap(),
                 b"\x17\x0d091115225616Z",
             ),
         ]);
@@ -488,16 +524,15 @@ mod tests {
     fn test_write_generalizedtime() {
         assert_writes(&[
             (
-                GeneralizedTime::new(Utc.with_ymd_and_hms(1991, 5, 6, 23, 45, 40).unwrap())
-                    .unwrap(),
+                GeneralizedTime::new(DateTime::new(1991, 5, 6, 23, 45, 40).unwrap()).unwrap(),
                 b"\x18\x0f19910506234540Z",
             ),
             (
-                GeneralizedTime::new(Utc.timestamp_opt(0, 0).unwrap()).unwrap(),
+                GeneralizedTime::new(DateTime::new(1970, 1, 1, 0, 0, 0).unwrap()).unwrap(),
                 b"\x18\x0f19700101000000Z",
             ),
             (
-                GeneralizedTime::new(Utc.timestamp_opt(1258325776, 0).unwrap()).unwrap(),
+                GeneralizedTime::new(DateTime::new(2009, 11, 15, 22, 56, 16).unwrap()).unwrap(),
                 b"\x18\x0f20091115225616Z",
             ),
         ]);
@@ -607,7 +642,6 @@ mod tests {
 
     #[test]
     fn test_write_implicit() {
-        #[cfg(feature = "const-generics")]
         assert_writes::<Implicit<bool, 2>>(&[
             (Implicit::new(true), b"\x82\x01\xff"),
             (Implicit::new(false), b"\x82\x01\x00"),
@@ -648,7 +682,6 @@ mod tests {
 
     #[test]
     fn test_write_explicit() {
-        #[cfg(feature = "const-generics")]
         assert_writes::<Explicit<bool, 2>>(&[
             (Explicit::new(true), b"\xa2\x03\x01\x01\xff"),
             (Explicit::new(false), b"\xa2\x03\x01\x01\x00"),
@@ -718,5 +751,11 @@ mod tests {
             (Box::new(12u8), b"\x02\x01\x0c"),
             (Box::new(0), b"\x02\x01\x00"),
         ]);
+    }
+
+    #[test]
+    fn test_write_error_display() {
+        use alloc::string::ToString;
+        assert_eq!(&WriteError::AllocationError.to_string(), "allocation error");
     }
 }
