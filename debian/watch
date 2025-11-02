@@ -1,0 +1,6 @@
+Version: 5
+
+Source: https://qa.debian.org/cgi-bin/fakeupstream.cgi?upstream=crates.io/asn1
+Matching-Pattern:  .*/crates/asn1/@ANY_VERSION@/download
+Filenamemangle: s/.*\/(.*)\/download/asn1-$1\.tar\.gz/g
+Uversionmangle: s/(\d)[_\.\-\+]?((RC|rc|pre|dev|beta|alpha)\.?\d*)$/$1~$2/
