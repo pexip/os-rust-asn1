@@ -1,3 +1,9 @@
+rust-asn1 (0.23.0-2+pexip25u1) pexip-trixie; urgency=medium
+
+  * New upstream release
+
+ -- Huw Jones <huw@pexip.com>  Tue, 04 Nov 2025 11:12:54 +0000
+
 rust-asn1 (0.23.0-2) unstable; urgency=medium
 
   * Team upload.
