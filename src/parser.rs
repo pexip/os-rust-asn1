@@ -1,8 +1,8 @@
-use crate::types::{Asn1Readable, Tlv};
+use crate::types::{Asn1Readable, SimpleAsn1Readable, Tlv};
 use crate::Tag;
 use core::fmt;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ParseErrorKind {
     /// Something about the value was invalid.
     InvalidValue,
@@ -13,10 +13,23 @@ pub enum ParseErrorKind {
     /// encoding, or that a TLV was longer than 4GB, which is the maximum
     /// length that rust-asn1 supports.
     InvalidLength,
+    /// A container's size was invalid. This typically indicates an empty
+    /// or oversized structure.
+    InvalidSize {
+        min: usize,
+        max: usize,
+        actual: usize,
+    },
     /// An unexpected tag was encountered.
     UnexpectedTag { actual: Tag },
-    /// There was not enough data available to complete parsing.
-    ShortData,
+    /// There was not enough data available to complete parsing. `needed`
+    /// indicates the amount of data required to advance the parse.
+    ///
+    /// Note that providing `needed` additional bytes of data does not ensure
+    /// that `parse` will succeed -- it is the amount of data required to
+    /// satisfy the `read` operation that failed, and there may be subsequent
+    /// `read` operations that require additional data.
+    ShortData { needed: usize },
     /// An internal computation would have overflowed.
     IntegerOverflow,
     /// There was extraneous data in the input.
@@ -49,12 +62,16 @@ pub struct ParseError {
 }
 
 impl ParseError {
-    pub fn new(kind: ParseErrorKind) -> ParseError {
+    pub const fn new(kind: ParseErrorKind) -> ParseError {
         ParseError {
             kind,
             parse_locations: [None, None, None, None],
             parse_depth: 0,
         }
+    }
+
+    pub fn kind(&self) -> ParseErrorKind {
+        self.kind
     }
 
     #[doc(hidden)]
@@ -76,13 +93,13 @@ impl std::error::Error for ParseError {}
 struct SomeFmtOption<T>(Option<T>);
 
 impl<T: fmt::Debug> fmt::Debug for SomeFmtOption<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.as_ref().unwrap().fmt(f)
     }
 }
 
 impl fmt::Debug for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("ParseError");
         f.field("kind", &self.kind);
         if self.parse_depth > 0 {
@@ -102,8 +119,8 @@ impl fmt::Debug for ParseError {
                 .enumerate()
             {
                 locations[i] = match location.as_ref().unwrap() {
-                    ParseLocation::Field(ref f) => SomeFmtOption(Some(f as &dyn fmt::Debug)),
-                    ParseLocation::Index(ref i) => SomeFmtOption(Some(i as &dyn fmt::Debug)),
+                    ParseLocation::Field(f) => SomeFmtOption(Some(f as &dyn fmt::Debug)),
+                    ParseLocation::Index(i) => SomeFmtOption(Some(i as &dyn fmt::Debug)),
                 }
             }
 
@@ -114,16 +131,24 @@ impl fmt::Debug for ParseError {
 }
 
 impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ASN.1 parsing error: ")?;
         match self.kind {
             ParseErrorKind::InvalidValue => write!(f, "invalid value"),
             ParseErrorKind::InvalidTag => write!(f, "invalid tag"),
             ParseErrorKind::InvalidLength => write!(f, "invalid length"),
-            ParseErrorKind::UnexpectedTag { actual } => {
-                write!(f, "unexpected tag (got {:?})", actual)
+            ParseErrorKind::InvalidSize { min, max, actual } => {
+                write!(
+                    f,
+                    "invalid container size (expected between {min} and {max}, got {actual})"
+                )
             }
-            ParseErrorKind::ShortData => write!(f, "short data"),
+            ParseErrorKind::UnexpectedTag { actual } => {
+                write!(f, "unexpected tag (got {actual:?})")
+            }
+            ParseErrorKind::ShortData { needed } => {
+                write!(f, "short data (needed at least {needed} additional bytes)")
+            }
             ParseErrorKind::IntegerOverflow => write!(f, "integer overflow"),
             ParseErrorKind::ExtraData => write!(f, "extra data"),
             ParseErrorKind::InvalidSetOrdering => write!(f, "SET value was ordered incorrectly"),
@@ -142,7 +167,7 @@ pub type ParseResult<T> = Result<T, ParseError>;
 
 /// Parse takes a sequence of bytes of DER encoded ASN.1 data, constructs a
 /// parser, and invokes a callback to read elements from the ASN.1 parser.
-pub fn parse<'a, T, E: From<ParseError>, F: Fn(&mut Parser<'a>) -> Result<T, E>>(
+pub fn parse<'a, T, E: From<ParseError>, F: FnOnce(&mut Parser<'a>) -> Result<T, E>>(
     data: &'a [u8],
     f: F,
 ) -> Result<T, E> {
@@ -157,6 +182,24 @@ pub fn parse<'a, T, E: From<ParseError>, F: Fn(&mut Parser<'a>) -> Result<T, E>>
 /// `#[derive(asn1::Asn1Read)]`.
 pub fn parse_single<'a, T: Asn1Readable<'a>>(data: &'a [u8]) -> ParseResult<T> {
     parse(data, Parser::read_element::<T>)
+}
+
+/// Attempts to parse the `Tlv` at the start of `data` (allows trailing data).
+/// If successful, the `Tlv` and the trailing data after it are returned, if
+/// unsuccessful a `ParseError` is returned.
+///
+/// This can be useful where you have a file or stream format that relies on
+/// ASN.1 TLVs for framing.
+///
+/// When parsing a stream, if an error is returned, if its `kind` is
+/// `ParseErrorKind::ShortData`, this indicates that `data` did not contain
+/// sufficient data to parse an entire `Tlv`, and thus adding more data may
+/// resolve this. All other errors are "fatal" and cannot be resolved with
+/// additional data.
+pub fn strip_tlv(data: &[u8]) -> ParseResult<(Tlv<'_>, &[u8])> {
+    let mut p = Parser::new(data);
+    let tlv = p.read_element::<Tlv<'_>>()?;
+    Ok((tlv, p.data))
 }
 
 /// Encapsulates an ongoing parse. For almost all use-cases the correct
@@ -183,7 +226,8 @@ impl<'a> Parser<'a> {
         Parser::new(self.data)
     }
 
-    pub(crate) fn peek_tag(&mut self) -> Option<Tag> {
+    /// Returns the tag of the next element, without consuming it.
+    pub fn peek_tag(&mut self) -> Option<Tag> {
         let (tag, _) = Tag::from_bytes(self.data).ok()?;
         Some(tag)
     }
@@ -202,7 +246,9 @@ impl<'a> Parser<'a> {
     #[inline]
     fn read_bytes(&mut self, length: usize) -> ParseResult<&'a [u8]> {
         if length > self.data.len() {
-            return Err(ParseError::new(ParseErrorKind::ShortData));
+            return Err(ParseError::new(ParseErrorKind::ShortData {
+                needed: length - self.data.len(),
+            }));
         }
         let (result, data) = self.data.split_at(length);
         self.data = data;
@@ -221,7 +267,8 @@ impl<'a> Parser<'a> {
                 Ok(length)
             }
             0x82 => {
-                let length = usize::from(self.read_u8()?) << 8 | usize::from(self.read_u8()?);
+                let length_bytes = self.read_bytes(2)?;
+                let length = (usize::from(length_bytes[0]) << 8) | usize::from(length_bytes[1]);
                 // Enforce that we're not using long form for values <0x80,
                 // and that the first byte of the length is not zero (i.e.
                 // that we're minimally encoded)
@@ -231,9 +278,10 @@ impl<'a> Parser<'a> {
                 Ok(length)
             }
             0x83 => {
-                let length = usize::from(self.read_u8()?) << 16
-                    | usize::from(self.read_u8()?) << 8
-                    | usize::from(self.read_u8()?);
+                let length_bytes = self.read_bytes(3)?;
+                let length = (usize::from(length_bytes[0]) << 16)
+                    | (usize::from(length_bytes[1]) << 8)
+                    | usize::from(length_bytes[2]);
                 // Same thing as the 0x82 case
                 if length < 0x10000 {
                     return Err(ParseError::new(ParseErrorKind::InvalidLength));
@@ -241,10 +289,11 @@ impl<'a> Parser<'a> {
                 Ok(length)
             }
             0x84 => {
-                let length = usize::from(self.read_u8()?) << 24
-                    | usize::from(self.read_u8()?) << 16
-                    | usize::from(self.read_u8()?) << 8
-                    | usize::from(self.read_u8()?);
+                let length_bytes = self.read_bytes(4)?;
+                let length = (usize::from(length_bytes[0]) << 24)
+                    | (usize::from(length_bytes[1]) << 16)
+                    | (usize::from(length_bytes[2]) << 8)
+                    | usize::from(length_bytes[3]);
                 // Same thing as the 0x82 case
                 if length < 0x1000000 {
                     return Err(ParseError::new(ParseErrorKind::InvalidLength));
@@ -285,6 +334,32 @@ impl<'a> Parser<'a> {
     pub fn read_element<T: Asn1Readable<'a>>(&mut self) -> ParseResult<T> {
         T::parse(self)
     }
+
+    /// This is an alias for `read_element::<Explicit<T, tag>>` for use when
+    /// the tag is not known at compile time.
+    pub fn read_explicit_element<T: Asn1Readable<'a>>(&mut self, tag: u32) -> ParseResult<T> {
+        let expected_tag = crate::explicit_tag(tag);
+        let tlv = self.read_tlv()?;
+        if tlv.tag != expected_tag {
+            return Err(ParseError::new(ParseErrorKind::UnexpectedTag {
+                actual: tlv.tag,
+            }));
+        }
+        parse_single(tlv.data())
+    }
+
+    /// This is an alias for `read_element::<Implicit<T, tag>>` for use when
+    /// the tag is not known at compile time.
+    pub fn read_implicit_element<T: SimpleAsn1Readable<'a>>(&mut self, tag: u32) -> ParseResult<T> {
+        let expected_tag = crate::implicit_tag(tag, T::TAG);
+        let tlv = self.read_tlv()?;
+        if tlv.tag != expected_tag {
+            return Err(ParseError::new(ParseErrorKind::UnexpectedTag {
+                actual: tlv.tag,
+            }));
+        }
+        T::parse_data(tlv.data())
+    }
 }
 
 #[cfg(test)]
@@ -295,9 +370,11 @@ mod tests {
     use crate::{
         BMPString, BigInt, BigUint, BitString, Choice1, Choice2, Choice3, DateTime, Enumerated,
         Explicit, GeneralizedTime, IA5String, Implicit, ObjectIdentifier, OctetStringEncoded,
-        OwnedBitString, ParseError, ParseErrorKind, ParseLocation, ParseResult, PrintableString,
-        Sequence, SequenceOf, SetOf, Tag, Tlv, UniversalString, UtcTime, Utf8String, VisibleString,
+        OwnedBigInt, OwnedBigUint, OwnedBitString, ParseError, ParseErrorKind, ParseLocation,
+        ParseResult, PrintableString, Sequence, SequenceOf, SetOf, Tag, Tlv, UniversalString,
+        UtcTime, Utf8String, VisibleString, X509GeneralizedTime,
     };
+    #[cfg(not(feature = "std"))]
     use alloc::boxed::Box;
     use alloc::{format, vec};
     use core::fmt;
@@ -323,7 +400,7 @@ mod tests {
         // Automatic 'static SEQUENCE containing an automatic 'static
         // OCTET_STRING
         let result = crate::parse(b"\x30\x03\x04\x01\x00", |p| {
-            p.read_element::<Sequence>()?
+            p.read_element::<Sequence<'_>>()?
                 .parse(|p| p.read_element::<&[u8]>())
         })
         .unwrap();
@@ -331,7 +408,7 @@ mod tests {
 
         // BIT_STRING
         let result = crate::parse::<_, ParseError, _>(b"\x03\x02\x00\x00", |p| {
-            Ok(p.read_element::<BitString>()?.as_bytes())
+            Ok(p.read_element::<BitString<'_>>()?.as_bytes())
         })
         .unwrap();
         assert_eq!(result, b"\x00");
@@ -356,7 +433,7 @@ mod tests {
                 "ParseError { kind: InvalidValue, location: [\"Abc::123\", 12] }",
             ),
         ] {
-            assert_eq!(&format!("{:?}", e), expected);
+            assert_eq!(&format!("{e:?}"), expected);
         }
     }
 
@@ -374,6 +451,10 @@ mod tests {
             (
                 ParseError::new(ParseErrorKind::InvalidLength),
                 "ASN.1 parsing error: invalid length"
+            ),
+            (
+                ParseError::new(ParseErrorKind::InvalidSize { min: 1, max: 5, actual: 0 }),
+                "ASN.1 parsing error: invalid container size (expected between 1 and 5, got 0)",
             ),
             (
                 ParseError::new(ParseErrorKind::IntegerOverflow),
@@ -400,9 +481,9 @@ mod tests {
                 "ASN.1 parsing error: DEFINED BY with unknown value"
             ),
             (
-                ParseError::new(ParseErrorKind::ShortData)
+                ParseError::new(ParseErrorKind::ShortData{needed: 7})
                     .add_location(ParseLocation::Field("Abc::123")),
-                "ASN.1 parsing error: short data",
+                "ASN.1 parsing error: short data (needed at least 7 additional bytes)",
             ),
             (
                 ParseError::new(ParseErrorKind::UnexpectedTag {
@@ -414,7 +495,64 @@ mod tests {
             ),
         ]
         {
-            assert_eq!(&format!("{}", e), expected);
+            assert_eq!(&format!("{e}"), expected);
+        }
+    }
+
+    #[test]
+    fn test_parse_error_kind() {
+        let e = ParseError::new(ParseErrorKind::EncodedDefault);
+        assert_eq!(e.kind(), ParseErrorKind::EncodedDefault);
+    }
+
+    #[test]
+    fn test_strip_tlv() {
+        for (der_bytes, expected) in [
+            (
+                b"" as &[u8],
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+            ),
+            (
+                b"\x04",
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+            ),
+            (
+                b"\x04\x82",
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 2 })),
+            ),
+            (
+                b"\x04\x03",
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 3 })),
+            ),
+            (
+                b"\x04\x03ab",
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+            ),
+            (
+                b"\x04\x03abc",
+                Ok((
+                    Tlv {
+                        tag: Tag::primitive(0x04),
+                        data: b"abc",
+                        full_data: b"\x04\x03abc",
+                    },
+                    b"" as &[u8],
+                )),
+            ),
+            (
+                b"\x04\x03abc\x00\x00\x00",
+                Ok((
+                    Tlv {
+                        tag: Tag::primitive(0x04),
+                        data: b"abc",
+                        full_data: b"\x04\x03abc",
+                    },
+                    b"\x00\x00\x00",
+                )),
+            ),
+        ] {
+            let result = crate::strip_tlv(der_bytes);
+            assert_eq!(result, expected);
         }
     }
 
@@ -447,6 +585,15 @@ mod tests {
     }
 
     #[test]
+    fn test_peek_tag() {
+        let result = crate::parse(b"\x02\x01\x7f", |p| {
+            assert_eq!(p.peek_tag(), Some(Tag::primitive(0x02)));
+            p.read_element::<u8>()
+        });
+        assert_eq!(result, Ok(127));
+    }
+
+    #[test]
     fn test_errors() {
         #[derive(Debug, PartialEq, Eq)]
         enum E {
@@ -464,7 +611,9 @@ mod tests {
             &[
                 (Ok(8), b"\x02\x01\x08"),
                 (
-                    Err(E::P(ParseError::new(ParseErrorKind::ShortData))),
+                    Err(E::P(ParseError::new(ParseErrorKind::ShortData {
+                        needed: 1,
+                    }))),
                     b"\x02\x01",
                 ),
                 (Err(E::X(7)), b"\x02\x01\x07"),
@@ -482,7 +631,7 @@ mod tests {
 
     #[test]
     fn test_parse_tlv() {
-        assert_parses::<Tlv>(&[
+        assert_parses::<Tlv<'_>>(&[
             (
                 Ok(Tlv {
                     tag: Tag::primitive(0x4),
@@ -492,11 +641,17 @@ mod tests {
                 b"\x04\x03abc",
             ),
             (
-                Err(ParseError::new(ParseErrorKind::ShortData)),
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 2 })),
                 b"\x04\x03a",
             ),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b"\x04"),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b""),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"\x04",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"",
+            ),
             // Long form tags
             (
                 Ok(Tlv {
@@ -530,10 +685,16 @@ mod tests {
                 }),
                 b"\x41\x00",
             ),
-            (Err(ParseError::new(ParseErrorKind::InvalidTag)), b"\x1f"),
-            (Err(ParseError::new(ParseErrorKind::InvalidTag)), b"\xff"),
             (
-                Err(ParseError::new(ParseErrorKind::InvalidTag)),
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"\x1f",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"\xff",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
                 b"\x1f\x85",
             ),
             // Overflow u32 for the tag number.
@@ -617,12 +778,32 @@ mod tests {
                 Err(ParseError::new(ParseErrorKind::InvalidLength)),
                 b"\x04\x89\x01\x01\x01\x01\x01\x01\x01\x01\x01"
             ),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b"\x04\x03\x01\x02"),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b"\x04\x82\xff\xff\xff\xff\xff\xff"),
+            (Err(ParseError::new(ParseErrorKind::ShortData{needed: 1})), b"\x04\x03\x01\x02"),
+            (Err(ParseError::new(ParseErrorKind::ShortData{needed: 65531})), b"\x04\x82\xff\xff\xff\xff\xff\xff"),
             // 3 byte length form with leading 0.
             (Err(ParseError::new(ParseErrorKind::InvalidLength)), b"\x04\x83\x00\xff\xff"),
             // 4 byte length form with leading 0.
             (Err(ParseError::new(ParseErrorKind::InvalidLength)), b"\x04\x84\x00\xff\xff\xff"),
+        ]);
+
+        assert_parses::<[u8; 0]>(&[
+            (Ok([]), b"\x04\x00"),
+            (
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x04\x02\x01\x02",
+            ),
+        ]);
+
+        assert_parses::<[u8; 1]>(&[
+            (Ok([2]), b"\x04\x01\x02"),
+            (
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x04\x00",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x04\x02\x01\x02",
+            ),
         ]);
     }
 
@@ -656,10 +837,7 @@ mod tests {
             (Ok(-128), b"\x02\x01\x80"),
             (Ok(-129), b"\x02\x02\xff\x7f"),
             (Ok(-256), b"\x02\x02\xff\x00"),
-            (
-                Ok(core::i64::MAX),
-                b"\x02\x08\x7f\xff\xff\xff\xff\xff\xff\xff",
-            ),
+            (Ok(i64::MAX), b"\x02\x08\x7f\xff\xff\xff\xff\xff\xff\xff"),
             (
                 Err(ParseError::new(ParseErrorKind::UnexpectedTag {
                     actual: Tag::primitive(0x3),
@@ -667,11 +845,17 @@ mod tests {
                 b"\x03\x00",
             ),
             (
-                Err(ParseError::new(ParseErrorKind::ShortData)),
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
                 b"\x02\x02\x00",
             ),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b""),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b"\x02"),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"\x02",
+            ),
             (
                 Err(ParseError::new(ParseErrorKind::IntegerOverflow)),
                 b"\x02\x09\x02\x00\x00\x00\x00\x00\x00\x00\x00",
@@ -699,7 +883,7 @@ mod tests {
     fn parse_int_u64() {
         assert_parses::<u64>(&[
             (
-                Ok(core::u64::MAX),
+                Ok(u64::MAX),
                 b"\x02\x09\x00\xff\xff\xff\xff\xff\xff\xff\xff",
             ),
             (
@@ -723,7 +907,7 @@ mod tests {
             (Ok(-128), b"\x02\x01\x80"),
             (Ok(-129), b"\x02\x02\xff\x7f"),
             (Ok(-256), b"\x02\x02\xff\x00"),
-            (Ok(core::i32::MAX), b"\x02\x04\x7f\xff\xff\xff"),
+            (Ok(i32::MAX), b"\x02\x04\x7f\xff\xff\xff"),
             (
                 Err(ParseError::new(ParseErrorKind::UnexpectedTag {
                     actual: Tag::primitive(0x3),
@@ -731,11 +915,17 @@ mod tests {
                 b"\x03\x00",
             ),
             (
-                Err(ParseError::new(ParseErrorKind::ShortData)),
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
                 b"\x02\x02\x00",
             ),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b""),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b"\x02"),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"\x02",
+            ),
             (
                 Err(ParseError::new(ParseErrorKind::IntegerOverflow)),
                 b"\x02\x09\x02\x00\x00\x00\x00\x00\x00\x00\x00",
@@ -821,7 +1011,7 @@ mod tests {
 
     #[test]
     fn test_parse_biguint() {
-        assert_parses::<BigUint>(&[
+        assert_parses::<BigUint<'_>>(&[
             (Ok(BigUint::new(b"\x00").unwrap()), b"\x02\x01\x00"),
             (Ok(BigUint::new(b"\x00\xff").unwrap()), b"\x02\x02\x00\xff"),
             (
@@ -844,8 +1034,41 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_ownedbiguint() {
+        assert_parses::<OwnedBigUint>(&[
+            (
+                Ok(OwnedBigUint::new(b"\x00".to_vec()).unwrap()),
+                b"\x02\x01\x00",
+            ),
+            (
+                Ok(OwnedBigUint::new(b"\x00\xff".to_vec()).unwrap()),
+                b"\x02\x02\x00\xff",
+            ),
+            (
+                Ok(OwnedBigUint::new(
+                    b"\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff".to_vec(),
+                )
+                .unwrap()),
+                b"\x02\x0d\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x02\x00",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x02\x01\x80",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x02\x02\xff\x80",
+            ),
+        ]);
+    }
+
+    #[test]
     fn test_parse_bigint() {
-        assert_parses::<BigInt>(&[
+        assert_parses::<BigInt<'_>>(&[
             (Ok(BigInt::new(b"\x80").unwrap()), b"\x02\x01\x80"),
             (Ok(BigInt::new(b"\xff").unwrap()), b"\x02\x01\xff"),
             (
@@ -858,6 +1081,39 @@ mod tests {
             ),
             (
                 Ok(BigInt::new(b"\xff\x7f\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff").unwrap()),
+                b"\x02\x0c\xff\x7f\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x02\x00",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn test_parse_owned_bigint() {
+        assert_parses::<OwnedBigInt>(&[
+            (
+                Ok(OwnedBigInt::new(b"\x80".to_vec()).unwrap()),
+                b"\x02\x01\x80",
+            ),
+            (
+                Ok(OwnedBigInt::new(b"\xff".to_vec()).unwrap()),
+                b"\x02\x01\xff",
+            ),
+            (
+                Ok(OwnedBigInt::new(b"\x00\xff\xff".to_vec()).unwrap()),
+                b"\x02\x03\x00\xff\xff",
+            ),
+            (
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x02\x02\xff\xff",
+            ),
+            (
+                Ok(
+                    OwnedBigInt::new(b"\xff\x7f\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff".to_vec())
+                        .unwrap(),
+                ),
                 b"\x02\x0c\xff\x7f\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff",
             ),
             (
@@ -975,7 +1231,7 @@ mod tests {
 
     #[test]
     fn test_parse_printable_string() {
-        assert_parses::<PrintableString>(&[
+        assert_parses::<PrintableString<'_>>(&[
             (Ok(PrintableString::new("abc").unwrap()), b"\x13\x03abc"),
             (Ok(PrintableString::new(")").unwrap()), b"\x13\x01)"),
             (
@@ -987,7 +1243,7 @@ mod tests {
 
     #[test]
     fn test_parse_ia5string() {
-        assert_parses::<IA5String>(&[
+        assert_parses::<IA5String<'_>>(&[
             (Ok(IA5String::new("abc").unwrap()), b"\x16\x03abc"),
             (Ok(IA5String::new(")").unwrap()), b"\x16\x01)"),
             (
@@ -999,7 +1255,7 @@ mod tests {
 
     #[test]
     fn test_parse_utf8string() {
-        assert_parses::<Utf8String>(&[
+        assert_parses::<Utf8String<'_>>(&[
             (Ok(Utf8String::new("abc")), b"\x0c\x03abc"),
             (Ok(Utf8String::new(")")), b"\x0c\x01)"),
             (
@@ -1011,7 +1267,7 @@ mod tests {
 
     #[test]
     fn test_parse_visiblestring() {
-        assert_parses::<VisibleString>(&[
+        assert_parses::<VisibleString<'_>>(&[
             (Ok(VisibleString::new("abc").unwrap()), b"\x1a\x03abc"),
             (Ok(VisibleString::new(")").unwrap()), b"\x1a\x01)"),
             (
@@ -1023,7 +1279,7 @@ mod tests {
 
     #[test]
     fn test_parse_bmpstring() {
-        assert_parses::<BMPString>(&[
+        assert_parses::<BMPString<'_>>(&[
             (
                 Ok(BMPString::new(b"\x00a\x00b\x00c").unwrap()),
                 b"\x1e\x06\x00a\x00b\x00c",
@@ -1045,7 +1301,7 @@ mod tests {
 
     #[test]
     fn test_parse_universalstring() {
-        assert_parses::<UniversalString>(&[
+        assert_parses::<UniversalString<'_>>(&[
             (
                 Ok(UniversalString::new(b"\x00\x00\x00a\x00\x00\x00b\x00\x00\x00c").unwrap()),
                 b"\x1c\x0c\x00\x00\x00a\x00\x00\x00b\x00\x00\x00c",
@@ -1214,10 +1470,10 @@ mod tests {
     }
 
     #[test]
-    fn test_generalizedtime() {
-        assert_parses::<GeneralizedTime>(&[
+    fn test_x509_generalizedtime() {
+        assert_parses::<X509GeneralizedTime>(&[
             (
-                Ok(GeneralizedTime::new(DateTime::new(2010, 1, 2, 3, 4, 5).unwrap()).unwrap()),
+                Ok(X509GeneralizedTime::new(DateTime::new(2010, 1, 2, 3, 4, 5).unwrap()).unwrap()),
                 b"\x18\x0f20100102030405Z",
             ),
             (
@@ -1234,7 +1490,7 @@ mod tests {
             ),
             (
                 // 29th of February (Leap Year)
-                Ok(GeneralizedTime::new(DateTime::new(2000, 2, 29, 3, 4, 5).unwrap()).unwrap()),
+                Ok(X509GeneralizedTime::new(DateTime::new(2000, 2, 29, 3, 4, 5).unwrap()).unwrap()),
                 b"\x18\x0f20000229030405Z",
             ),
             (
@@ -1364,6 +1620,58 @@ mod tests {
     }
 
     #[test]
+    fn test_generalized_time() {
+        assert_parses::<GeneralizedTime>(&[
+            (
+                // General case
+                Ok(GeneralizedTime::new(
+                    DateTime::new(2010, 1, 2, 3, 4, 5).unwrap(),
+                    Some(123_456_000),
+                )
+                .unwrap()),
+                b"\x18\x1620100102030405.123456Z",
+            ),
+            (
+                // No fractional time
+                Ok(
+                    GeneralizedTime::new(DateTime::new(2010, 1, 2, 3, 4, 5).unwrap(), None)
+                        .unwrap(),
+                ),
+                b"\x18\x0f20100102030405Z",
+            ),
+            (
+                // Starting with 0 is ok
+                Ok(GeneralizedTime::new(
+                    DateTime::new(2010, 1, 2, 3, 4, 5).unwrap(),
+                    Some(12_375_600),
+                )
+                .unwrap()),
+                b"\x18\x1720100102030405.0123756Z",
+            ),
+            (
+                // But ending with 0 is not OK
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x18\x1220100102030405.10Z",
+            ),
+            (
+                // Too many digits
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x18\x1a20100102030405.0123456789Z",
+            ),
+            (
+                // Missing timezone
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x18\x1520100102030405.123456",
+            ),
+            (
+                // Invalid fractional second
+                Err(ParseError::new(ParseErrorKind::InvalidValue)),
+                b"\x18\x1020100102030405.Z",
+            ),
+        ])
+    }
+
+    #[test]
     fn test_enumerated() {
         assert_parses::<Enumerated>(&[
             (Ok(Enumerated::new(12)), b"\x0a\x01\x0c"),
@@ -1382,7 +1690,7 @@ mod tests {
                 b"\x30\x06\x02\x01\x01\x02\x01\x02",
             ),
             (
-                Err(ParseError::new(ParseErrorKind::ShortData)),
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
                 b"\x30\x04\x02\x01\x01",
             ),
             (
@@ -1398,7 +1706,7 @@ mod tests {
             &[
                 (Ok((1, 2)), b"\x30\x06\x02\x01\x01\x02\x01\x02"),
                 (
-                    Err(ParseError::new(ParseErrorKind::ShortData)),
+                    Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
                     b"\x30\x03\x02\x01\x01",
                 ),
                 (
@@ -1407,7 +1715,7 @@ mod tests {
                 ),
             ],
             |p| {
-                p.read_element::<Sequence>()?
+                p.read_element::<Sequence<'_>>()?
                     .parse(|p| Ok((p.read_element::<i64>()?, p.read_element::<i64>()?)))
             },
         );
@@ -1423,12 +1731,12 @@ mod tests {
                 ),
                 (Ok(vec![]), b"\x30\x00"),
                 (
-                    Err(ParseError::new(ParseErrorKind::ShortData)),
+                    Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
                     b"\x30\x02\x02\x01",
                 ),
             ],
             |p| {
-                p.read_element::<Sequence>()?.parse(|p| {
+                p.read_element::<Sequence<'_>>()?.parse(|p| {
                     let mut result = vec![];
                     while !p.is_empty() {
                         result.push(p.read_element::<i64>()?);
@@ -1449,12 +1757,58 @@ mod tests {
                 ),
                 (Ok(vec![]), b"\x30\x00"),
                 (
-                    Err(ParseError::new(ParseErrorKind::ShortData)
+                    Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })
                         .add_location(ParseLocation::Index(0))),
                     b"\x30\x02\x02\x01",
                 ),
             ],
-            |p| Ok(p.read_element::<SequenceOf<i64>>()?.collect()),
+            |p| Ok(p.read_element::<SequenceOf<'_, i64>>()?.collect()),
+        );
+    }
+
+    #[test]
+    fn test_sequence_of_constrained_lengths() {
+        // Minimum only.
+        assert_parses_cb(
+            &[
+                (
+                    Ok(vec![1, 2, 3]),
+                    b"\x30\x09\x02\x01\x01\x02\x01\x02\x02\x01\x03",
+                ),
+                (
+                    Err(ParseError::new(ParseErrorKind::InvalidSize {
+                        min: 1,
+                        max: usize::MAX,
+                        actual: 0,
+                    })),
+                    b"\x30\x00",
+                ),
+            ],
+            |p| Ok(p.read_element::<SequenceOf<'_, i64, 1>>()?.collect()),
+        );
+
+        // Minimum and maximum.
+        assert_parses_cb(
+            &[
+                (
+                    Err(ParseError::new(ParseErrorKind::InvalidSize {
+                        min: 1,
+                        max: 2,
+                        actual: 3,
+                    })),
+                    b"\x30\x09\x02\x01\x01\x02\x01\x02\x02\x01\x03",
+                ),
+                (
+                    Err(ParseError::new(ParseErrorKind::InvalidSize {
+                        min: 1,
+                        max: 2,
+                        actual: 0,
+                    })),
+                    b"\x30\x00",
+                ),
+                (Ok(vec![3, 1]), b"\x30\x06\x02\x01\x03\x02\x01\x01"),
+            ],
+            |p| Ok(p.read_element::<SequenceOf<'_, i64, 1, 2>>()?.collect()),
         );
     }
 
@@ -1473,7 +1827,7 @@ mod tests {
                     b"\x31\x06\x02\x01\x03\x02\x01\x01",
                 ),
                 (
-                    Err(ParseError::new(ParseErrorKind::ShortData)
+                    Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })
                         .add_location(ParseLocation::Index(0))),
                     b"\x31\x01\x02",
                 ),
@@ -1485,7 +1839,7 @@ mod tests {
                     b"\x31\x02\x01\x00",
                 ),
             ],
-            |p| Ok(p.read_element::<SetOf<u64>>()?.collect()),
+            |p| Ok(p.read_element::<SetOf<'_, u64>>()?.collect()),
         );
     }
 
@@ -1498,8 +1852,14 @@ mod tests {
                 (Ok((None, Some(18))), b"\x02\x01\x12"),
                 (Ok((Some(true), Some(18))), b"\x01\x01\xff\x02\x01\x12"),
                 (Ok((None, None)), b""),
-                (Err(ParseError::new(ParseErrorKind::ShortData)), b"\x01"),
-                (Err(ParseError::new(ParseErrorKind::ShortData)), b"\x02"),
+                (
+                    Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                    b"\x01",
+                ),
+                (
+                    Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                    b"\x02",
+                ),
             ],
             |p| {
                 Ok((
@@ -1509,7 +1869,7 @@ mod tests {
             },
         );
 
-        assert_parses::<Option<Tlv>>(&[
+        assert_parses::<Option<Tlv<'_>>>(&[
             (
                 Ok(Some(Tlv {
                     tag: Tag::primitive(0x4),
@@ -1519,7 +1879,10 @@ mod tests {
                 b"\x04\x03abc",
             ),
             (Ok(None), b""),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b"\x04"),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"\x04",
+            ),
         ]);
 
         assert_parses::<Option<Choice2<u64, bool>>>(&[
@@ -1540,7 +1903,10 @@ mod tests {
                 })),
                 b"\x03\x00",
             ),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b""),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"",
+            ),
         ]);
     }
 
@@ -1555,7 +1921,10 @@ mod tests {
                 })),
                 b"\x03\x00",
             ),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b""),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"",
+            ),
         ]);
     }
 
@@ -1571,7 +1940,10 @@ mod tests {
                 })),
                 b"\x03\x00",
             ),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b""),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"",
+            ),
         ]);
     }
 
@@ -1593,7 +1965,7 @@ mod tests {
                 b"\x02\x01\xff",
             ),
         ]);
-        assert_parses::<Implicit<Sequence, 2>>(&[
+        assert_parses::<Implicit<Sequence<'_>, 2>>(&[
             (Ok(Implicit::new(Sequence::new(b"abc"))), b"\xa2\x03abc"),
             (Ok(Implicit::new(Sequence::new(b""))), b"\xa2\x00"),
             (
@@ -1608,8 +1980,57 @@ mod tests {
                 })),
                 b"\x02\x01\xff",
             ),
-            (Err(ParseError::new(ParseErrorKind::ShortData)), b""),
+            (
+                Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                b"",
+            ),
         ]);
+        assert_parses_cb(
+            &[
+                (Ok(true), b"\x82\x01\xff"),
+                (Ok(false), b"\x82\x01\x00"),
+                (
+                    Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                    b"",
+                ),
+                (
+                    Err(ParseError::new(ParseErrorKind::UnexpectedTag {
+                        actual: Tag::primitive(0x01),
+                    })),
+                    b"\x01\x01\xff",
+                ),
+                (
+                    Err(ParseError::new(ParseErrorKind::UnexpectedTag {
+                        actual: Tag::primitive(0x02),
+                    })),
+                    b"\x02\x01\xff",
+                ),
+            ],
+            |p| p.read_implicit_element::<bool>(2),
+        );
+        assert_parses_cb(
+            &[
+                (Ok(Sequence::new(b"abc")), b"\xa2\x03abc"),
+                (Ok(Sequence::new(b"")), b"\xa2\x00"),
+                (
+                    Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                    b"",
+                ),
+                (
+                    Err(ParseError::new(ParseErrorKind::UnexpectedTag {
+                        actual: Tag::primitive(0x01),
+                    })),
+                    b"\x01\x01\xff",
+                ),
+                (
+                    Err(ParseError::new(ParseErrorKind::UnexpectedTag {
+                        actual: Tag::primitive(0x02),
+                    })),
+                    b"\x02\x01\xff",
+                ),
+            ],
+            |p| p.read_implicit_element::<Sequence<'_>>(2),
+        );
     }
 
     #[test]
@@ -1636,6 +2057,29 @@ mod tests {
                 b"\xa2\x03\x03\x01\xff",
             ),
         ]);
+        assert_parses_cb(
+            &[
+                (Ok(true), b"\xa2\x03\x01\x01\xff"),
+                (Ok(false), b"\xa2\x03\x01\x01\x00"),
+                (
+                    Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
+                    b"",
+                ),
+                (
+                    Err(ParseError::new(ParseErrorKind::UnexpectedTag {
+                        actual: Tag::primitive(0x01),
+                    })),
+                    b"\x01\x01\xff",
+                ),
+                (
+                    Err(ParseError::new(ParseErrorKind::UnexpectedTag {
+                        actual: Tag::primitive(0x03),
+                    })),
+                    b"\xa2\x03\x03\x01\xff",
+                ),
+            ],
+            |p| p.read_explicit_element::<bool>(2),
+        );
     }
 
     #[test]

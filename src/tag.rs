@@ -3,7 +3,7 @@ use crate::parser::{ParseError, ParseErrorKind, ParseResult};
 use crate::writer::{WriteBuf, WriteResult};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum TagClass {
+pub enum TagClass {
     Universal = 0b00,
     Application = 0b01,
     ContextSpecific = 0b10,
@@ -25,7 +25,7 @@ impl Tag {
     pub fn from_bytes(mut data: &[u8]) -> ParseResult<(Tag, &[u8])> {
         let tag = match data.first() {
             Some(&b) => b,
-            None => return Err(ParseError::new(ParseErrorKind::ShortData)),
+            None => return Err(ParseError::new(ParseErrorKind::ShortData { needed: 1 })),
         };
         data = &data[1..];
         let mut value = u32::from(tag & 0x1f);
@@ -45,11 +45,17 @@ impl Tag {
 
         // Long form tag
         if value == 0x1f {
-            let result = base128::read_base128_int(data)
+            let large_value;
+            (large_value, data) = base128::read_base128_int(data).map_err(|e| {
+                if matches!(e.kind(), ParseErrorKind::ShortData { .. }) {
+                    e
+                } else {
+                    ParseError::new(ParseErrorKind::InvalidTag)
+                }
+            })?;
+            value = large_value
+                .try_into()
                 .map_err(|_| ParseError::new(ParseErrorKind::InvalidTag))?;
-            // MSRV of 1.59 required for `(value, data) = ...;`
-            value = result.0;
-            data = result.1;
             // Tags must be encoded in minimal form.
             if value < 0x1f {
                 return Err(ParseError::new(ParseErrorKind::InvalidTag));
@@ -104,12 +110,12 @@ impl Tag {
         if self.value >= 0x1f {
             b |= 0x1f;
             dest.push_byte(b)?;
-            let len = base128::base128_length(self.value);
+            let len = base128::base128_length(self.value.into());
             let orig_len = dest.len();
             for _ in 0..len {
                 dest.push_byte(0)?;
             }
-            base128::write_base128_int(&mut dest.as_mut_slice()[orig_len..], self.value);
+            base128::write_base128_int(&mut dest.as_mut_slice()[orig_len..], self.value.into());
         } else {
             b |= self.value as u8;
             dest.push_byte(b)?;
@@ -118,8 +124,27 @@ impl Tag {
         Ok(())
     }
 
-    pub(crate) const fn is_constructed(self) -> bool {
+    pub const fn is_constructed(self) -> bool {
         self.constructed
+    }
+
+    pub fn class(self) -> TagClass {
+        self.class
+    }
+
+    pub fn value(self) -> u32 {
+        self.value
+    }
+
+    /// Get the number of bytes needed to encode this tag.
+    pub(crate) fn encoded_length(self) -> usize {
+        if self.value >= 0x1f {
+            // Long form: 1 byte for the initial tag byte + base128 encoding of the value
+            1 + crate::base128::base128_length(self.value.into())
+        } else {
+            // Short form: 1 byte
+            1
+        }
     }
 }
 
@@ -145,5 +170,18 @@ mod tests {
         ] {
             assert_eq!(&t.as_u8(), expected);
         }
+    }
+
+    #[test]
+    fn test_class() {
+        assert_eq!(
+            Tag::new(5, TagClass::Application, true).class(),
+            TagClass::Application
+        );
+    }
+
+    #[test]
+    fn test_value() {
+        assert_eq!(Tag::new(5, TagClass::Application, true).value(), 5);
     }
 }

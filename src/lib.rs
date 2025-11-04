@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
+#![deny(rust_2018_idioms)]
 
 //! This crate provides you with the ability to generate and parse ASN.1
 //! encoded data. More precisely, it provides you with the ability to generate
@@ -68,10 +69,9 @@
 //! let result = asn1::write_single(&Signature{r, s});
 //! ```
 //!
-//! On Rust >= 1.51.0, [`Explicit`] and [`Implicit`] tagging may be specified
-//! with struct members of those types. However on Rust < 1.51.0, this is not
-//! possible, since they require const generics. Instead, the `#[implicit]`
-//! and `#[explicit]` attributes may be used:
+//! Fields may be marked as `EXPLICIT` or `IMPLICIT` either by struct members
+//! having the types [`Explicit`] and [`Implicit`] or via the use of
+//! `#[explicit]` and `#[implicit]` annotations:
 //! ```
 //! #[derive(asn1::Asn1Read, asn1::Asn1Write)]
 //! struct SomeSequence<'a> {
@@ -92,7 +92,7 @@
 //! #[derive(asn1::Asn1Read, asn1::Asn1Write)]
 //! enum Time {
 //!     UTCTime(asn1::UtcTime),
-//!     GeneralizedTime(asn1::GeneralizedTime)
+//!     X509GeneralizedTime(asn1::X509GeneralizedTime)
 //! }
 //! ```
 //!
@@ -129,12 +129,16 @@
 //! }
 //! ```
 //!
-//! # Fallible allocations
+//! # Design philosophy
 //!
-//! `asn1::write` and `asn1::write_single` emit a `Vec<u8>` containing the
-//! serialized DER data. If you would like to be able to handle allocation
-//! failures when writing data, specify the `fallible-allocations` feature of
-//! this crate. This feature require Rust 1.57 or greater.
+//! As we have designed the `asn1` crate, we value the following things, in
+//! this order:
+//!
+//! - **Security**
+//! - **Correctness**
+//! - **Performance**
+//! - **Generality**
+//! - **Ergonomics**
 
 extern crate alloc;
 
@@ -149,15 +153,16 @@ mod writer;
 pub use crate::bit_string::{BitString, OwnedBitString};
 pub use crate::object_identifier::ObjectIdentifier;
 pub use crate::parser::{
-    parse, parse_single, ParseError, ParseErrorKind, ParseLocation, ParseResult, Parser,
+    parse, parse_single, strip_tlv, ParseError, ParseErrorKind, ParseLocation, ParseResult, Parser,
 };
 pub use crate::tag::Tag;
 pub use crate::types::{
     Asn1DefinedByReadable, Asn1DefinedByWritable, Asn1Readable, Asn1Writable, BMPString, BigInt,
     BigUint, Choice1, Choice2, Choice3, DateTime, DefinedByMarker, Enumerated, Explicit,
-    GeneralizedTime, IA5String, Implicit, Null, OctetStringEncoded, PrintableString, Sequence,
-    SequenceOf, SequenceOfWriter, SequenceWriter, SetOf, SetOfWriter, SimpleAsn1Readable,
-    SimpleAsn1Writable, Tlv, UniversalString, UtcTime, Utf8String, VisibleString,
+    GeneralizedTime, IA5String, Implicit, Null, OctetStringEncoded, OwnedBigInt, OwnedBigUint,
+    PrintableString, Sequence, SequenceOf, SequenceOfWriter, SequenceWriter, SetOf, SetOfWriter,
+    SimpleAsn1Readable, SimpleAsn1Writable, Tlv, UniversalString, UtcTime, Utf8String,
+    VisibleString, X509GeneralizedTime,
 };
 pub use crate::writer::{write, write_single, WriteBuf, WriteError, WriteResult, Writer};
 
@@ -201,29 +206,24 @@ pub const fn explicit_tag(tag: u32) -> Tag {
     Tag::new(tag, tag::TagClass::ContextSpecific, true)
 }
 
-/// This API is public so that it may be used from macros, but should not be
-/// considered a part of the supported API surface.
+/// Utility for use in `asn1_derive`. Not considered part of the public API.
 #[doc(hidden)]
-pub fn read_defined_by<'a, T: Asn1Readable<'a>, U: Asn1DefinedByReadable<'a, T>>(
-    v: T,
-    p: &mut Parser<'a>,
-) -> ParseResult<U> {
-    U::parse(v, p)
+pub trait OptionExt {
+    type T;
 }
 
-/// This API is public so that it may be used from macros, but should not be
-/// considered a part of the supported API surface.
 #[doc(hidden)]
-pub fn write_defined_by<T: Asn1Writable, U: Asn1DefinedByWritable<T>>(
-    v: &U,
-    w: &mut Writer,
-) -> WriteResult {
-    v.write(w)
+impl<T> OptionExt for Option<T> {
+    type T = T;
 }
 
-/// This API is public so that it may be used from macros, but should not be
-/// considered a part of the supported API surface.
-#[doc(hidden)]
-pub fn writable_defined_by_item<T: Asn1Writable, U: Asn1DefinedByWritable<T>>(v: &U) -> &T {
-    v.item()
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_implicit_tag() {
+        let t = crate::implicit_tag(3, crate::Tag::primitive(2));
+        assert_eq!(t.as_u8(), Some(0x83));
+        let t = crate::implicit_tag(3, crate::Tag::constructed(2));
+        assert_eq!(t.as_u8(), Some(0xa3));
+    }
 }

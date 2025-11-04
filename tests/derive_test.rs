@@ -118,6 +118,25 @@ fn test_explicit() {
 }
 
 #[test]
+fn test_explicit_tlv() {
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, Debug, PartialEq, Eq)]
+    struct ExplicitTlv<'a> {
+        #[explicit(5)]
+        a: Option<asn1::Tlv<'a>>,
+    }
+
+    assert_roundtrips(&[
+        (Ok(ExplicitTlv { a: None }), b"\x30\x00"),
+        (
+            Ok(ExplicitTlv {
+                a: asn1::parse_single(b"\x05\x00").unwrap(),
+            }),
+            b"\x30\x04\xa5\x02\x05\x00",
+        ),
+    ]);
+}
+
+#[test]
 fn test_implicit() {
     #[derive(asn1::Asn1Read, asn1::Asn1Write, Debug, PartialEq, Eq)]
     struct EmptySequence;
@@ -241,11 +260,11 @@ fn test_default_not_literal() {
 #[test]
 fn test_default_const_generics() {
     #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug)]
-    struct DefaultFields<'a> {
+    struct DefaultFields {
         #[default(15)]
-        a: asn1::Explicit<'a, u8, 1>,
+        a: asn1::Explicit<u8, 1>,
         #[default(17)]
-        b: asn1::Implicit<'a, u8, 5>,
+        b: asn1::Implicit<u8, 5>,
     }
 
     assert_roundtrips(&[
@@ -306,6 +325,64 @@ fn test_default_bool() {
                 .add_location(asn1::ParseLocation::Field("DefaultField::a"))),
             b"\x30\x03\x01\x01\x00",
         ),
+    ]);
+}
+
+#[test]
+fn test_struct_field_types() {
+    // This test covers encoding a variety of different field types. Mostly to
+    // cover their encoded_length implementations.
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct TlvField<'a> {
+        t: asn1::Tlv<'a>,
+    }
+    assert_roundtrips(&[
+        (
+            Ok(TlvField {
+                t: asn1::parse_single(b"\x05\x00").unwrap(),
+            }),
+            b"\x30\x02\x05\x00",
+        ),
+        (
+            Ok(TlvField {
+                t: asn1::parse_single(b"\x1f\x81\x80\x01\x00").unwrap(),
+            }),
+            b"\x30\x05\x1f\x81\x80\x01\x00",
+        ),
+    ]);
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct ChoiceFields<'a> {
+        c1: asn1::Choice1<&'a [u8]>,
+        c2: asn1::Choice2<bool, u64>,
+    }
+    assert_roundtrips(&[
+        (
+            Ok(ChoiceFields {
+                c1: asn1::Choice1::ChoiceA(b""),
+                c2: asn1::Choice2::ChoiceA(true),
+            }),
+            b"\x30\x05\x04\x00\x01\x01\xff",
+        ),
+        (
+            Ok(ChoiceFields {
+                c1: asn1::Choice1::ChoiceA(b""),
+                c2: asn1::Choice2::ChoiceB(12),
+            }),
+            b"\x30\x05\x04\x00\x02\x01\x0c",
+        ),
+    ]);
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct LongField<'a> {
+        f: &'a [u8],
+    }
+    assert_roundtrips(&[
+        (
+            Ok(LongField{f: b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}),
+            b"\x30\x81\x84\x04\x81\x81aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
     ]);
 }
 
@@ -423,6 +500,30 @@ fn test_enum_implicit() {
 }
 
 #[test]
+fn test_enum_in_explicit() {
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    enum BasicChoice {
+        A(u64),
+    }
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct StructWithExplicitChoice {
+        #[explicit(0)]
+        c: Option<BasicChoice>,
+    }
+
+    assert_roundtrips(&[
+        (Ok(StructWithExplicitChoice { c: None }), b"\x30\x00"),
+        (
+            Ok(StructWithExplicitChoice {
+                c: Some(BasicChoice::A(3)),
+            }),
+            b"\x30\x05\xa0\x03\x02\x01\x03",
+        ),
+    ]);
+}
+
+#[test]
 fn test_error_parse_location() {
     #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
     struct InnerSeq(u64);
@@ -465,8 +566,10 @@ fn test_required_implicit() {
     assert_roundtrips::<RequiredImplicit>(&[
         (Ok(RequiredImplicit { value: 8 }), b"\x30\x03\x80\x01\x08"),
         (
-            Err(asn1::ParseError::new(asn1::ParseErrorKind::ShortData)
-                .add_location(asn1::ParseLocation::Field("RequiredImplicit::value"))),
+            Err(
+                asn1::ParseError::new(asn1::ParseErrorKind::ShortData { needed: 1 })
+                    .add_location(asn1::ParseLocation::Field("RequiredImplicit::value")),
+            ),
             b"\x30\x00",
         ),
         (
@@ -493,8 +596,10 @@ fn test_required_explicit() {
             b"\x30\x05\xa0\x03\x02\x01\x08",
         ),
         (
-            Err(asn1::ParseError::new(asn1::ParseErrorKind::ShortData)
-                .add_location(asn1::ParseLocation::Field("RequiredExplicit::value"))),
+            Err(
+                asn1::ParseError::new(asn1::ParseErrorKind::ShortData { needed: 1 })
+                    .add_location(asn1::ParseLocation::Field("RequiredExplicit::value")),
+            ),
             b"\x30\x00",
         ),
         (
@@ -668,6 +773,164 @@ fn test_defined_by_mod() {
                     .add_location(asn1::ParseLocation::Field("S::value")),
             ),
             b"\x30\x04\x06\x02\x2a\x07",
+        ),
+    ]);
+}
+
+#[test]
+fn test_defined_by_explicit() {
+    pub const OID1: asn1::ObjectIdentifier = asn1::oid!(1, 2, 3);
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct S<'a> {
+        oid: asn1::DefinedByMarker<asn1::ObjectIdentifier>,
+        #[defined_by(oid)]
+        value: asn1::Explicit<Value<'a>, 1>,
+    }
+
+    #[derive(asn1::Asn1DefinedByRead, asn1::Asn1DefinedByWrite, PartialEq, Debug, Eq)]
+    enum Value<'a> {
+        #[defined_by(OID1)]
+        OctetString(&'a [u8]),
+    }
+
+    assert_roundtrips::<S>(&[(
+        Ok(S {
+            oid: asn1::DefinedByMarker::marker(),
+            value: asn1::Explicit::new(Value::OctetString(b"abc")),
+        }),
+        b"\x30\x0b\x06\x02\x2a\x03\xa1\x05\x04\x03abc",
+    )]);
+}
+
+#[test]
+fn test_generics() {
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct S<T> {
+        value: T,
+    }
+
+    assert_roundtrips::<S<u64>>(&[(Ok(S { value: 12 }), b"\x30\x03\x02\x01\x0c")]);
+    assert_roundtrips::<S<bool>>(&[(Ok(S { value: true }), b"\x30\x03\x01\x01\xff")]);
+
+    assert_eq!(
+        asn1::write_single(&S {
+            value: asn1::SequenceOfWriter::new([true, true]),
+        })
+        .unwrap(),
+        b"\x30\x08\x30\x06\x01\x01\xff\x01\x01\xff"
+    )
+}
+
+#[test]
+fn test_perfect_derive() {
+    trait X {
+        type Type: PartialEq + std::fmt::Debug;
+    }
+
+    #[derive(PartialEq, Debug)]
+    struct Op;
+    impl X for Op {
+        type Type = u64;
+    }
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct S<T: X> {
+        value: T::Type,
+    }
+
+    assert_roundtrips::<S<Op>>(&[(Ok(S { value: 12 }), b"\x30\x03\x02\x01\x0c")]);
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct TaggedRequiredFields<T: X> {
+        #[implicit(1, required)]
+        a: T::Type,
+        #[explicit(2, required)]
+        b: T::Type,
+    }
+
+    assert_roundtrips::<TaggedRequiredFields<Op>>(&[(
+        Ok(TaggedRequiredFields { a: 1, b: 3 }),
+        b"\x30\x08\x81\x01\x01\xa2\x03\x02\x01\x03",
+    )]);
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    struct TaggedOptionalFields<T: X> {
+        #[implicit(1)]
+        a: Option<T::Type>,
+        #[explicit(2)]
+        b: Option<T::Type>,
+    }
+
+    assert_roundtrips::<TaggedOptionalFields<Op>>(&[
+        (
+            Ok(TaggedOptionalFields {
+                a: Some(1),
+                b: Some(3),
+            }),
+            b"\x30\x08\x81\x01\x01\xa2\x03\x02\x01\x03",
+        ),
+        (Ok(TaggedOptionalFields { a: None, b: None }), b"\x30\x00"),
+    ]);
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug, Eq)]
+    enum TaggedEnum<T: X> {
+        #[implicit(0)]
+        Implicit(T::Type),
+        #[explicit(1)]
+        Explicit(T::Type),
+    }
+
+    assert_roundtrips::<TaggedEnum<Op>>(&[
+        (Ok(TaggedEnum::Implicit(1)), b"\x80\x01\x01"),
+        (Ok(TaggedEnum::Explicit(1)), b"\xa1\x03\x02\x01\x01"),
+    ]);
+}
+
+#[test]
+fn test_defined_by_perfect_derive() {
+    trait X {
+        type Type: PartialEq + std::fmt::Debug;
+    }
+
+    #[derive(PartialEq, Debug)]
+    struct Op;
+    impl X for Op {
+        type Type = u64;
+    }
+
+    #[derive(asn1::Asn1Read, asn1::Asn1Write, PartialEq, Debug)]
+    struct S<T: X> {
+        oid: asn1::DefinedByMarker<asn1::ObjectIdentifier>,
+        #[defined_by(oid)]
+        value: Value<T>,
+    }
+
+    pub const OID1: asn1::ObjectIdentifier = asn1::oid!(1, 2, 3);
+    pub const OID2: asn1::ObjectIdentifier = asn1::oid!(1, 2, 4);
+
+    #[derive(asn1::Asn1DefinedByRead, asn1::Asn1DefinedByWrite, PartialEq, Debug)]
+    enum Value<T: X> {
+        #[defined_by(OID1)]
+        A(T::Type),
+        #[defined_by(OID2)]
+        B(T::Type),
+    }
+
+    assert_roundtrips::<S<Op>>(&[
+        (
+            Ok(S {
+                oid: asn1::DefinedByMarker::marker(),
+                value: Value::A(5),
+            }),
+            b"\x30\x07\x06\x02\x2a\x03\x02\x01\x05",
+        ),
+        (
+            Ok(S {
+                oid: asn1::DefinedByMarker::marker(),
+                value: Value::B(7),
+            }),
+            b"\x30\x07\x06\x02\x2a\x04\x02\x01\x07",
         ),
     ]);
 }
