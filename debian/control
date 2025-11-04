@@ -16,7 +16,7 @@ Vcs-Git: https://salsa.debian.org/rust-team/debcargo-conf.git [src/asn1]
 Vcs-Browser: https://salsa.debian.org/rust-team/debcargo-conf/tree/master/src/asn1
 X-Cargo-Crate: asn1
 Rules-Requires-Root: no
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ trixie
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ sid
 
 Package: librust-asn1-dev
 Architecture: any
